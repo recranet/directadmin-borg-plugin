@@ -1,0 +1,14 @@
+services:
+  plugin-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: directadmin-borg-plugin-test
+    volumes:
+      # The plugin source, mounted read-write so install.sh can rewrite shebangs.
+      - ../..:/plugin
+    working_dir: /plugin
+    # borg needs a writable /tmp and enough memory for its cache; nothing else.
+    tmpfs:
+      - /run
+    command: ["test/run-tests.sh"]

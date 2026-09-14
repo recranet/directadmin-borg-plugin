@@ -1,0 +1,33 @@
+#!/usr/local/bin/php -n
+<?php
+/** Evolution menu entry for user level (plugin.conf: menu_user). */
+
+declare(strict_types=1);
+
+require_once dirname(__DIR__) . '/bootstrap.php';
+
+use Recranet\DirectAdminBorg\Plugin;
+
+$menu = [];
+
+try {
+    // Hide the entry entirely when the admin has turned self-service off.
+    if (Plugin::boot(dirname(__DIR__))->config()->load()->userRestoreEnabled()) {
+        $menu = [[
+            'name'    => 'Backups',
+            'icon'    => '/CMD_PLUGINS/borg/images/user_icon.svg',
+            'entries' => [[
+                'name'    => 'Restore Files',
+                'icon'    => '/CMD_PLUGINS/borg/images/user_icon.svg',
+                'href'    => '/CMD_PLUGINS/borg/index.html',
+                'newTab'  => false,
+                'updates' => 0,
+            ]],
+        ]];
+    }
+} catch (Throwable) {
+    $menu = [];
+}
+
+echo "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\n\r\n",
+    json_encode($menu, JSON_UNESCAPED_SLASHES);

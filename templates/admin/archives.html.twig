@@ -1,0 +1,110 @@
+{% if not configured %}
+    <div class="borg-card">
+        <p class="borg-empty">
+            No repository is configured yet. Set one up under <a href="{{ url({ tab: 'repository' }) }}">Repository</a>.
+        </p>
+    </div>
+{% elseif browser %}
+    <div class="borg-card">
+        <h2>{{ browser.archive }}</h2>
+
+        {% include 'partial/breadcrumbs.html.twig' with { crumbs: browser.crumbs } %}
+
+        {% if browser.error %}
+            <div class="borg-alert borg-alert-err">Could not read the archive: {{ browser.error }}</div>
+            <a class="borg-btn" href="{{ url({ tab: 'archives' }) }}">Back to archives</a>
+        {% else %}
+            {% if browser.truncated %}
+                <div class="borg-alert borg-alert-warn">
+                    This directory has more entries than can be listed. Open a subdirectory to see the rest.
+                </div>
+            {% endif %}
+
+            {% if browser.entries is empty %}
+                <p class="borg-empty">This directory is empty in the archive.</p>
+                <a class="borg-btn" href="{{ url({ tab: 'archives' }) }}">Back to archives</a>
+            {% else %}
+                <form method="post" action="{{ url({}) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="action" value="restore">
+                    <input type="hidden" name="archive" value="{{ browser.archive }}">
+
+                    <div class="borg-scroll">
+                        <table class="borg-table">
+                            <thead>
+                                <tr><th></th><th>Name</th><th>Size</th><th>Modified</th><th>Owner</th><th>Mode</th></tr>
+                            </thead>
+                            <tbody>
+                                {% for entry in browser.entries %}
+                                    <tr>
+                                        <td><input type="checkbox" name="paths[]" value="{{ entry.path }}"></td>
+                                        <td class="borg-mono">
+                                            {% if entry.directory %}
+                                                <a href="{{ url({ tab: 'archives', archive: browser.archive, path: entry.path }) }}">{{ entry.name }}/</a>
+                                            {% else %}
+                                                {{ entry.name }}
+                                            {% endif %}
+                                        </td>
+                                        <td class="borg-num">{{ entry.directory ? '-' : entry.size|bytes }}</td>
+                                        <td>{{ entry.modified|datetime }}</td>
+                                        <td>{{ entry.owner }}</td>
+                                        <td class="borg-mono">{{ entry.mode }}</td>
+                                    </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="borg-field" style="margin-top:14px">
+                        <label for="borg-destination">Restore into</label>
+                        <input type="text" id="borg-destination" name="destination" value="{{ browser.default_destination }}">
+                        <span class="borg-hint">
+                            Files are written below this directory, keeping their full original path.
+                            Existing files there are overwritten, so restore into a staging directory
+                            rather than straight over live data.
+                        </span>
+                    </div>
+
+                    <div class="borg-actions">
+                        <button class="borg-btn borg-btn-primary" type="submit">Restore selected</button>
+                        <a class="borg-btn" href="{{ url({ tab: 'archives' }) }}">Back to archives</a>
+                    </div>
+                </form>
+            {% endif %}
+        {% endif %}
+    </div>
+{% elseif error %}
+    <div class="borg-alert borg-alert-err">Could not list archives: {{ error }}</div>
+{% elseif archives is empty %}
+    <div class="borg-card"><p class="borg-empty">No archives yet. Run a backup from the Overview tab.</p></div>
+{% else %}
+    <div class="borg-card">
+        <h2>Archives ({{ archives|length }})</h2>
+        <div class="borg-scroll">
+            <table class="borg-table">
+                <thead><tr><th>Archive</th><th>Created</th><th>Age</th><th></th></tr></thead>
+                <tbody>
+                    {% for archive in archives %}
+                        <tr>
+                            <td class="borg-mono">
+                                <a href="{{ url({ tab: 'archives', archive: archive.name }) }}">{{ archive.name }}</a>
+                            </td>
+                            <td>{{ archive.time|datetime }}</td>
+                            <td>{{ archive.time|age }}</td>
+                            <td class="borg-num">
+                                {# Deleting an archive is irreversible, so it takes the exact name typed back. #}
+                                <form method="post" action="{{ url({ tab: 'archives' }) }}" class="borg-inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                    <input type="hidden" name="action" value="delete_archive">
+                                    <input type="hidden" name="archive" value="{{ archive.name }}">
+                                    <input type="text" name="confirm" placeholder="type name to delete" style="max-width:220px">
+                                    <button class="borg-btn borg-btn-danger" type="submit">Delete</button>
+                                </form>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+{% endif %}

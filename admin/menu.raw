@@ -1,0 +1,41 @@
+#!/usr/local/bin/php -n
+<?php
+/** Evolution menu entry for admin level (plugin.conf: menu_admin). */
+
+declare(strict_types=1);
+
+require_once dirname(__DIR__) . '/bootstrap.php';
+
+use Recranet\DirectAdminBorg\Job\Job;
+use Recranet\DirectAdminBorg\Plugin;
+
+$updates = 0;
+
+try {
+    $plugin = Plugin::boot(dirname(__DIR__));
+
+    // Surface a failed backup as a notification badge on the menu entry.
+    foreach ($plugin->jobs()->recent(5, null, Job::TYPE_BACKUP) as $job) {
+        if ($job->isFinished()) {
+            $updates = $job->status() === Job::STATUS_FAILED ? 1 : 0;
+            break;
+        }
+    }
+} catch (Throwable) {
+    $updates = 0;
+}
+
+$menu = [[
+    'name'    => 'Backups',
+    'icon'    => '/CMD_PLUGINS_ADMIN/borg/images/admin_icon.svg',
+    'entries' => [[
+        'name'    => 'Borg Backup',
+        'icon'    => '/CMD_PLUGINS_ADMIN/borg/images/admin_icon.svg',
+        'href'    => '/CMD_PLUGINS_ADMIN/borg/index.html',
+        'newTab'  => false,
+        'updates' => $updates,
+    ]],
+]];
+
+echo "HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\n\r\n",
+    json_encode($menu, JSON_UNESCAPED_SLASHES);

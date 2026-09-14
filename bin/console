@@ -1,0 +1,32 @@
+#!/usr/local/bin/php -n
+<?php
+/**
+ * Console entry point for the DirectAdmin Borg plugin.
+ *
+ * Used by the detached worker (borg:job), by cron (borg:scheduled-backup), by
+ * the DirectAdmin hook (borg:hook-backup), and by an administrator diagnosing
+ * the plugin from a shell (borg:status).
+ */
+
+declare(strict_types=1);
+
+require_once dirname(__DIR__) . '/bootstrap.php';
+
+use Recranet\DirectAdminBorg\Console\HookBackupCommand;
+use Recranet\DirectAdminBorg\Console\RunJobCommand;
+use Recranet\DirectAdminBorg\Console\ScheduledBackupCommand;
+use Recranet\DirectAdminBorg\Console\StatusCommand;
+use Recranet\DirectAdminBorg\Plugin;
+use Symfony\Component\Console\Application;
+
+$plugin = Plugin::boot(dirname(__DIR__));
+
+$application = new Application('DirectAdmin Borg plugin', '1.0.0');
+$application->addCommands([
+    new RunJobCommand($plugin),
+    new ScheduledBackupCommand($plugin),
+    new HookBackupCommand($plugin),
+    new StatusCommand($plugin),
+]);
+
+exit($application->run());

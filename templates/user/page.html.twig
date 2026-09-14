@@ -1,0 +1,48 @@
+{% extends 'layout.html.twig' %}
+
+{% block content %}
+    {% if not enabled %}
+        <div class="borg-card">
+            <p class="borg-empty">
+                Self-service restores are turned off on this server.
+                Ask your hosting provider to restore files for you.
+            </p>
+        </div>
+    {% elseif fatal %}
+        <div class="borg-alert borg-alert-err">{{ fatal }}</div>
+    {% elseif not available %}
+        <div class="borg-card"><p class="borg-empty">No backups are configured on this server yet.</p></div>
+    {% elseif job %}
+        {% include 'partial/job_detail.html.twig' with {
+            heading: 'Restore',
+            show_type: false,
+            back_url: url({})
+        } %}
+    {% else %}
+        {% if browser %}
+            {% include 'user/browser.html.twig' %}
+        {% else %}
+            {% include 'user/archives.html.twig' %}
+        {% endif %}
+
+        {% if recent_jobs is not empty %}
+            <div class="borg-card">
+                <h2>Your recent restores</h2>
+                <div class="borg-scroll">
+                    <table class="borg-table">
+                        <thead><tr><th>When</th><th>Status</th><th>Result</th></tr></thead>
+                        <tbody>
+                            {% for item in recent_jobs %}
+                                <tr>
+                                    <td><a href="{{ url({ job: item.id }) }}">{{ item.created_at|datetime }}</a></td>
+                                    <td><span class="borg-badge borg-badge-{{ item.badge }}">{{ item.status }}</span></td>
+                                    <td>{{ item.message }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        {% endif %}
+    {% endif %}
+{% endblock %}

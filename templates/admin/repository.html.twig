@@ -1,0 +1,67 @@
+<form method="post" action="{{ url({}) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="action" value="save_repository">
+
+    <div class="borg-card">
+        <h2>Repository</h2>
+
+        <div class="borg-field">
+            <label for="borg-repository">Repository location</label>
+            <input type="text" id="borg-repository" name="repository" value="{{ config.repository }}">
+            <span class="borg-hint">
+                Local path (<code>/backup/borg</code>), <code>ssh://user@host:22/path</code>
+                or <code>user@host:/path</code>. Do not include <code>::archive</code>.
+            </span>
+        </div>
+
+        <div class="borg-field">
+            <label for="borg-encryption">Encryption</label>
+            <select id="borg-encryption" name="encryption">
+                {% for value, label in encryption_modes %}
+                    <option value="{{ value }}"{{ value == config.encryption ? ' selected' : '' }}>{{ label }}</option>
+                {% endfor %}
+            </select>
+            <span class="borg-hint">
+                Only used when initialising a new repository. Changing it afterwards re-encrypts nothing.
+            </span>
+        </div>
+
+        <div class="borg-field">
+            <label for="borg-passphrase">Passphrase</label>
+            <input type="password" id="borg-passphrase" name="passphrase" value="" autocomplete="new-password">
+            <span class="borg-hint">
+                {% if has_passphrase %}
+                    A passphrase is stored. Leave blank to keep it.
+                {% else %}
+                    Required for repokey and keyfile modes. Stored at <code>{{ passphrase_file }}</code>, mode 0600, root-only.
+                {% endif %}
+            </span>
+        </div>
+
+        <div class="borg-field">
+            <label><input type="checkbox" name="clear_passphrase" value="1">Remove the stored passphrase</label>
+        </div>
+
+        <div class="borg-field">
+            <label for="borg-ssh">SSH command (BORG_RSH)</label>
+            <input type="text" id="borg-ssh" name="ssh_command" value="{{ config.ssh_command }}">
+            <span class="borg-hint">
+                Optional, for remote repositories. For example
+                <code>ssh -i /root/.ssh/borg_ed25519 -o StrictHostKeyChecking=yes</code>.
+            </span>
+        </div>
+
+        <div class="borg-actions"><button class="borg-btn borg-btn-primary" type="submit">Save</button></div>
+    </div>
+</form>
+
+{% if configured %}
+    <div class="borg-card">
+        <h2>Initialise</h2>
+        <p>Creates a new empty repository at the configured location. Safe to run against an
+           existing repository: borg refuses and nothing is changed.</p>
+        <div class="borg-actions">
+            {{ include('admin/_button.html.twig', { action: 'init_repository', label: 'Initialise repository', class: '' }) }}
+        </div>
+    </div>
+{% endif %}

@@ -1,0 +1,42 @@
+<div class="borg-card">
+    <h2>Status</h2>
+    <div class="borg-grid">
+        <dl class="borg-stat"><dt>Repository</dt><dd>{{ status.repository ?: 'Not configured' }}</dd></dl>
+        <dl class="borg-stat"><dt>Encryption</dt><dd>{{ status.encryption }}</dd></dl>
+        <dl class="borg-stat"><dt>borg version</dt><dd>{{ borg.version ?: 'not installed' }}</dd></dl>
+        <dl class="borg-stat"><dt>Schedule</dt><dd>{{ status.schedule }}</dd></dl>
+        <dl class="borg-stat"><dt>Last backup</dt><dd>{{ status.last_backup }}</dd></dl>
+        {% if status.archive_count is not null %}
+            <dl class="borg-stat"><dt>Archives</dt><dd>{{ status.archive_count }}</dd></dl>
+        {% endif %}
+        {% if status.repository_size is not null %}
+            <dl class="borg-stat"><dt>Repository size</dt><dd>{{ status.repository_size|bytes }}</dd></dl>
+            <dl class="borg-stat"><dt>Original size</dt><dd>{{ status.original_size|bytes }}</dd></dl>
+        {% endif %}
+    </div>
+
+    {% if status.error %}
+        <div class="borg-alert borg-alert-warn" style="margin-top:12px">
+            Could not read the repository: {{ status.error }}
+        </div>
+    {% endif %}
+</div>
+
+{% if configured %}
+    <div class="borg-card">
+        <h2>Run now</h2>
+        <div class="borg-actions">
+            {{ include('admin/_button.html.twig', { action: 'run_backup', label: 'Back up now', class: 'borg-btn-primary' }) }}
+            {{ include('admin/_button.html.twig', { action: 'run_prune', label: 'Prune old archives', class: '' }) }}
+            {{ include('admin/_button.html.twig', { action: 'run_check', label: 'Check repository', class: '' }) }}
+            {{ include('admin/_button.html.twig', { action: 'break_lock', label: 'Break stale lock', class: 'borg-btn-danger' }) }}
+        </div>
+        <p class="borg-note">Backups run in the background; progress is shown under Jobs.</p>
+    </div>
+{% else %}
+    <div class="borg-card">
+        <h2>Get started</h2>
+        <p>Set a repository location under <a href="{{ url({ tab: 'repository' }) }}">Repository</a>,
+           initialise it, then run your first backup.</p>
+    </div>
+{% endif %}

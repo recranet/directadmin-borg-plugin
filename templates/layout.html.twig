@@ -1,0 +1,19 @@
+{# DirectAdmin splices this into the skin's |OUTPUT| token, so it is a fragment:
+   no <html>, <head> or <body>. Styles are namespaced under .borg-plugin so they
+   cannot leak into the surrounding skin. #}
+<div class="borg-plugin">
+    {% include 'partial/styles.html.twig' %}
+
+    <header class="borg-head">
+        <h1>{{ title }}</h1>
+        {% if subtitle %}<p class="borg-sub">{{ subtitle }}</p>{% endif %}
+    </header>
+
+    {% block warnings %}{% endblock %}
+
+    {% block tabs %}{% endblock %}
+
+    {% include 'partial/flash.html.twig' %}
+
+    {% block content %}{% endblock %}
+</div>

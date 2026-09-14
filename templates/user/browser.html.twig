@@ -1,0 +1,59 @@
+<div class="borg-card">
+    <h2>{{ browser.taken_at|datetime }}</h2>
+
+    {% include 'partial/breadcrumbs.html.twig' with { crumbs: browser.crumbs } %}
+
+    {% if browser.missing %}
+        <p class="borg-empty">This folder is not present in this backup.</p>
+        <a class="borg-btn" href="{{ url({}) }}">Back to backups</a>
+    {% else %}
+        {% if browser.truncated %}
+            <div class="borg-alert borg-alert-warn">
+                This folder contains too many items to list in full. Open a subfolder to see the rest.
+            </div>
+        {% endif %}
+
+        {% if browser.entries is empty %}
+            <p class="borg-empty">This folder was empty at the time of the backup.</p>
+            <a class="borg-btn" href="{{ url({}) }}">Back to backups</a>
+        {% else %}
+            <form method="post" action="{{ url({}) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="action" value="restore">
+                <input type="hidden" name="archive" value="{{ browser.archive }}">
+
+                <div class="borg-scroll">
+                    <table class="borg-table">
+                        <thead><tr><th></th><th>Name</th><th>Size</th><th>Modified</th></tr></thead>
+                        <tbody>
+                            {% for entry in browser.entries %}
+                                <tr>
+                                    <td><input type="checkbox" name="paths[]" value="{{ entry.path }}"></td>
+                                    <td class="borg-mono">
+                                        {% if entry.directory %}
+                                            <a href="{{ url({ archive: browser.archive, path: entry.path }) }}">{{ entry.name }}/</a>
+                                        {% else %}
+                                            {{ entry.name }}
+                                        {% endif %}
+                                    </td>
+                                    <td class="borg-num">{{ entry.directory ? '-' : entry.size|bytes }}</td>
+                                    <td>{{ entry.modified|datetime }}</td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+
+                <p class="borg-note">
+                    Selected items are copied into <span class="borg-mono">{{ browser.restore_dir }}</span>,
+                    keeping their folder structure. Your current files are never overwritten in place.
+                </p>
+
+                <div class="borg-actions">
+                    <button class="borg-btn borg-btn-primary" type="submit">Restore selected</button>
+                    <a class="borg-btn" href="{{ url({}) }}">Back to backups</a>
+                </div>
+            </form>
+        {% endif %}
+    {% endif %}
+</div>

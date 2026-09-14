@@ -1,0 +1,21 @@
+#!/usr/local/bin/php -n
+<?php
+/** Job status JSON for the admin page's poller. */
+
+declare(strict_types=1);
+
+require_once dirname(__DIR__) . '/bootstrap.php';
+
+use Recranet\DirectAdminBorg\Http\PluginRequest;
+use Recranet\DirectAdminBorg\Http\StatusEndpoint;
+use Recranet\DirectAdminBorg\Plugin;
+
+try {
+    $plugin = Plugin::boot(dirname(__DIR__));
+    $request = PluginRequest::fromEnvironment(PluginRequest::LEVEL_ADMIN);
+
+    StatusEndpoint::emit((new StatusEndpoint($plugin))->handle($request));
+} catch (Throwable $e) {
+    echo "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\n\r\n",
+        json_encode(['error' => $e->getMessage()]);
+}

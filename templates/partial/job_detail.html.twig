@@ -1,0 +1,34 @@
+<div class="borg-card">
+    <h2>{{ heading }}</h2>
+
+    <div class="borg-grid">
+        {% if show_type %}
+            <dl class="borg-stat"><dt>Type</dt><dd>{{ job.type }}</dd></dl>
+        {% endif %}
+        <dl class="borg-stat">
+            <dt>Status</dt>
+            <dd><span id="borg-job-status" class="borg-badge borg-badge-{{ job.badge }}">{{ job.status }}</span></dd>
+        </dl>
+        <dl class="borg-stat"><dt>Started</dt><dd>{{ job.started_at|datetime }}</dd></dl>
+        <dl class="borg-stat"><dt>Finished</dt><dd>{{ job.finished_at|datetime }}</dd></dl>
+
+        {% if job.stats %}
+            <dl class="borg-stat"><dt>Files</dt><dd>{{ job.stats.nfiles ?? '-' }}</dd></dl>
+            <dl class="borg-stat"><dt>Original</dt><dd>{{ job.stats.original_size|bytes }}</dd></dl>
+            <dl class="borg-stat"><dt>Deduplicated</dt><dd>{{ job.stats.deduplicated_size|bytes }}</dd></dl>
+        {% endif %}
+    </div>
+
+    {% if job.message %}<p>{{ job.message }}</p>{% endif %}
+
+    <h2>Log</h2>
+    <pre class="borg-log" id="borg-log">{{ log }}</pre>
+
+    <div class="borg-actions">
+        <a class="borg-btn" href="{{ back_url }}">Back</a>
+    </div>
+</div>
+
+{% if job.running %}
+    {% include 'partial/job_poller.html.twig' with { status_url: status_url } %}
+{% endif %}

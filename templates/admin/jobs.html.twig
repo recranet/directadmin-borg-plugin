@@ -1,0 +1,32 @@
+{% if job %}
+    {% include 'partial/job_detail.html.twig' with {
+        heading: job.id,
+        show_type: true,
+        back_url: url({ tab: 'jobs' })
+    } %}
+{% elseif jobs is empty %}
+    <div class="borg-card"><p class="borg-empty">Nothing has run yet.</p></div>
+{% else %}
+    <div class="borg-card">
+        <h2>Recent jobs</h2>
+        <div class="borg-scroll">
+            <table class="borg-table">
+                <thead>
+                    <tr><th>Job</th><th>Type</th><th>Status</th><th>Started by</th><th>Created</th><th>Result</th></tr>
+                </thead>
+                <tbody>
+                    {% for item in jobs %}
+                        <tr>
+                            <td class="borg-mono"><a href="{{ url({ tab: 'jobs', job: item.id }) }}">{{ item.id }}</a></td>
+                            <td>{{ item.type }}</td>
+                            <td><span class="borg-badge borg-badge-{{ item.badge }}">{{ item.status }}</span></td>
+                            <td>{{ item.owner }}</td>
+                            <td>{{ item.created_at|datetime }}</td>
+                            <td>{{ item.message }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+{% endif %}

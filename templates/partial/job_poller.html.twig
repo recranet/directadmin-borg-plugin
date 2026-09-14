@@ -1,0 +1,39 @@
+{# Refreshes a running job's log in place instead of reloading the whole skin. #}
+<script>
+(function () {
+    var url = {{ status_url|json_encode|raw }};
+    var log = document.getElementById('borg-log');
+    var badge = document.getElementById('borg-job-status');
+    if (!log) { return; }
+
+    var stopped = false;
+
+    function tick() {
+        if (stopped) { return; }
+        fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+            .then(function (response) { return response.json(); })
+            .then(function (data) {
+                if (typeof data.log === 'string') {
+                    // Only auto-scroll when the operator is already at the
+                    // bottom, so reading back through the log is not disrupted.
+                    var pinned = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
+                    log.textContent = data.log;
+                    if (pinned) { log.scrollTop = log.scrollHeight; }
+                }
+                if (badge && data.status) {
+                    badge.textContent = data.status;
+                    badge.className = 'borg-badge borg-badge-' + (data.badge || 'idle');
+                }
+                if (data.finished) {
+                    stopped = true;
+                    setTimeout(function () { window.location.reload(); }, 1200);
+                    return;
+                }
+                setTimeout(tick, 2000);
+            })
+            .catch(function () { setTimeout(tick, 5000); });
+    }
+
+    tick();
+})();
+</script>

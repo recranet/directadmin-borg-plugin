@@ -1,0 +1,35 @@
+{% extends 'layout.html.twig' %}
+
+{% block warnings %}
+    {% if not borg.installed %}
+        <div class="borg-alert borg-alert-err">
+            borg was not found at <code>{{ borg.binary }}</code>. Install it with
+            <code>dnf install borgbackup</code> or <code>apt install borgbackup</code>.
+        </div>
+    {% elseif borg.unsupported_major %}
+        <div class="borg-alert borg-alert-warn">
+            borg {{ borg.version }} is installed. This plugin targets the borg 1.x command line
+            (<code>repo::archive</code>); borg 2.x renamed those commands and is not supported yet.
+        </div>
+    {% endif %}
+
+    {% if borg.uid != 0 %}
+        <div class="borg-alert borg-alert-err">
+            This plugin is running as uid {{ borg.uid }}, not root. Set <code>admin_run_as=root</code>
+            in plugin.conf: backups cannot read <code>/home/*</code> (mode 0711), <code>/etc/shadow</code>
+            or the DirectAdmin configuration otherwise, and would silently archive almost nothing.
+        </div>
+    {% endif %}
+{% endblock %}
+
+{% block tabs %}
+    <nav class="borg-tabs">
+        {% for slug, label in tabs %}
+            <a class="borg-tab{{ slug == active_tab ? ' is-active' : '' }}" href="{{ url({ tab: slug }) }}">{{ label }}</a>
+        {% endfor %}
+    </nav>
+{% endblock %}
+
+{% block content %}
+    {% include 'admin/' ~ active_tab ~ '.html.twig' %}
+{% endblock %}

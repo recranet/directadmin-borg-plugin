@@ -1,0 +1,6 @@
+<p class="borg-crumbs">
+    {% for crumb in crumbs %}
+        {% if not loop.first %}<span>&rsaquo;</span>{% endif %}
+        <a href="{{ crumb.url }}">{{ crumb.label }}</a>
+    {% endfor %}
+</p>

@@ -1,0 +1,24 @@
+#!/usr/local/bin/php -n
+<?php
+/** User entry point: /CMD_PLUGINS/borg/ */
+
+declare(strict_types=1);
+
+require_once dirname(__DIR__) . '/bootstrap.php';
+
+use Recranet\DirectAdminBorg\Http\PluginRequest;
+use Recranet\DirectAdminBorg\Plugin;
+use Recranet\DirectAdminBorg\Security\CsrfTokenizer;
+use Recranet\DirectAdminBorg\Ui\UserPage;
+
+try {
+    $plugin = Plugin::boot(dirname(__DIR__));
+    $request = PluginRequest::fromEnvironment(PluginRequest::LEVEL_USER);
+
+    echo (new UserPage($plugin, $request, new CsrfTokenizer($plugin->paths, $plugin->filesystem())))->render();
+} catch (Throwable $e) {
+    echo '<div style="padding:12px;border:1px solid #c0392b;border-radius:6px;color:#c0392b">'
+        . '<strong>Borg plugin error:</strong> '
+        . htmlspecialchars($e->getMessage(), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+        . '</div>';
+}

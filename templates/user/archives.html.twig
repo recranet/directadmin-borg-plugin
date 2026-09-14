@@ -1,0 +1,26 @@
+{% if error %}
+    <div class="borg-alert borg-alert-err">
+        The backup repository is not readable right now. Please try again later or contact support.
+    </div>
+{% elseif archives is empty %}
+    <div class="borg-card"><p class="borg-empty">There are no backups to restore from yet.</p></div>
+{% else %}
+    <div class="borg-card">
+        <h2>Available backups</h2>
+        <p class="borg-note">Pick a date to browse your files as they were at that moment.</p>
+
+        <div class="borg-scroll">
+            <table class="borg-table">
+                <thead><tr><th>Backup date</th><th>Age</th></tr></thead>
+                <tbody>
+                    {% for archive in archives %}
+                        <tr>
+                            <td><a href="{{ url({ archive: archive.name, path: home }) }}">{{ archive.time|datetime }}</a></td>
+                            <td>{{ archive.time|age }}</td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+{% endif %}

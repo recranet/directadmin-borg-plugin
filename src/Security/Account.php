@@ -1,0 +1,139 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Recranet\DirectAdminBorg\Security;
+
+use Recranet\DirectAdminBorg\Exception\BorgPluginException;
+use Recranet\DirectAdminBorg\Paths;
+use Symfony\Component\Filesystem\Filesystem;
+use Symfony\Component\Finder\Finder;
+
+/**
+ * A DirectAdmin/UNIX account and the boundary of what it may restore.
+ *
+ * Plugin code runs as root even at user level, so this class is the only thing
+ * between a crafted request and another customer's data. The home directory is
+ * read from /etc/passwd and never taken from the request.
+ */
+final class Account
+{
+    private function __construct(
+        public readonly string $username,
+        public readonly string $home,
+        public readonly int $uid,
+        public readonly int $gid
+    ) {
+    }
+
+    /**
+     * @throws BorgPluginException when the name is not a usable local account
+     */
+    public static function resolve(string $username, Paths $paths): self
+    {
+        if (!preg_match('/^[a-z_][a-z0-9_-]{0,31}$/i', $username)) {
+            throw new BorgPluginException('Invalid account name.');
+        }
+
+        $entry = self::lookupPasswd($username, $paths->passwdFile);
+        if ($entry === null) {
+            throw new BorgPluginException(sprintf('No local account named "%s".', $username));
+        }
+
+        [$uid, $gid, $home] = $entry;
+
+        if ($uid === 0) {
+            throw new BorgPluginException('Refusing to treat a uid 0 account as a restore target.');
+        }
+
+        $home = PathGuard::normalize($home);
+        // A home of "/" or one that does not exist would make confine() accept
+        // the entire filesystem.
+        if ($home === '/') {
+            throw new BorgPluginException('Account home directory is the filesystem root.');
+        }
+        if (!is_dir($home)) {
+            throw new BorgPluginException('Account has no usable home directory.');
+        }
+
+        // When DirectAdmin's user registry is present, require a real DA user
+        // rather than any system account that happens to exist.
+        if (is_dir($paths->daUsersDir) && !is_dir($paths->daUsersDir . '/' . $username)) {
+            throw new BorgPluginException(sprintf('"%s" is not a DirectAdmin user.', $username));
+        }
+
+        return new self($username, $home, $uid, $gid);
+    }
+
+    /** @return array{0:int,1:int,2:string}|null */
+    private static function lookupPasswd(string $username, string $passwdFile): ?array
+    {
+        if (!is_readable($passwdFile)) {
+            return null;
+        }
+        $handle = @fopen($passwdFile, 'r');
+        if ($handle === false) {
+            return null;
+        }
+
+        try {
+            while (($line = fgets($handle)) !== false) {
+                $fields = explode(':', rtrim($line, "\r\n"));
+                if (\count($fields) < 6 || $fields[0] !== $username) {
+                    continue;
+                }
+
+                return [(int) $fields[2], (int) $fields[3], $fields[5]];
+            }
+        } finally {
+            fclose($handle);
+        }
+
+        return null;
+    }
+
+    /**
+     * Normalise a path from the request and assert it is inside this home.
+     *
+     * @throws \Recranet\DirectAdminBorg\Exception\UnsafePathException
+     */
+    public function confine(string $path): string
+    {
+        return PathGuard::confine($path, $this->home);
+    }
+
+    public function restoreRoot(string $directoryName): string
+    {
+        return $this->home . '/' . $directoryName;
+    }
+
+    /**
+     * Hand a restored tree back to the account.
+     *
+     * Extraction runs as root, so without this the user would be left with
+     * root-owned files inside their own home directory. Finder walks the tree;
+     * Filesystem applies ownership, following no symlinks of its own.
+     */
+    public function takeOwnership(string $path, Filesystem $filesystem): void
+    {
+        if (!file_exists($path)) {
+            return;
+        }
+
+        // Only ever touch a path that is already inside this account's home.
+        $this->confine($path);
+
+        $filesystem->chown($path, $this->uid, false);
+        $filesystem->chgrp($path, $this->gid, false);
+
+        if (!is_dir($path) || is_link($path)) {
+            return;
+        }
+
+        $finder = (new Finder())->in($path)->ignoreDotFiles(false)->ignoreVCS(false);
+        foreach ($finder as $item) {
+            $filesystem->chown($item->getPathname(), $this->uid, false);
+            $filesystem->chgrp($item->getPathname(), $this->gid, false);
+        }
+    }
+}
