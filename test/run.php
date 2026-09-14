@@ -497,7 +497,8 @@ $t->contains($out, 'Create the user in DirectAdmin first', 'a missing account is
 $t->contains($out, 'Restore Backups', 'the prompt names the DirectAdmin screen that recreates it');
 $t->notContains($out, 'Restoring ghost', 'no home-directory restore is started for a missing account');
 $t->notOk(is_dir('/home/admin/borg_restore/home/ghost'), 'nothing was restored into a home for a non-existent account');
-$t->contains($out, 'Restore only ghost', 'the admin-backup-only action is offered');
+$t->contains($out, 'Restore ghost', 'the admin-backup-only action is offered');
+$t->contains($out, 'Restore Backups', 'the numbered recovery sequence is shown');
 
 // That action is explicit: it only happens when the operator asks for it.
 $out = $t->page('admin', 'admin', ['tab' => 'archives', 'archive' => $archive], [
@@ -515,6 +516,81 @@ $t->is($ghostJob->params()['paths'], ['/home/admin/admin_backups/ghost.tar.gz'],
 $t->ok($t->waitForJob($plugin, $ghostJob->id, 180)?->status() === Job::STATUS_SUCCESS, 'the tarball restore completes');
 $t->ok(is_file('/home/admin/borg_restore/home/admin/admin_backups/ghost.tar.gz'), 'the tarball lands on disk');
 $t->notOk(is_dir('/home/admin/borg_restore/home/ghost'), 'still no home directory for the missing account');
+
+$t->group('Handing the tarball straight to DirectAdmin');
+
+// The realistic recovery case: the account is gone, and DirectAdmin's restore
+// only looks in its own backups directory.
+$plugin->filesystem()->remove('/home/admin/admin_backups/ghost.tar.gz');
+$t->notOk(is_file('/home/admin/admin_backups/ghost.tar.gz'), 'the tarball is gone from the live server');
+
+$out = $t->page('admin', 'admin', ['tab' => 'archives', 'archive' => $archive], [
+    'action'         => 'restore_admin_backup',
+    'archive'        => $archive,
+    'username'       => 'ghost',
+    'to_directadmin' => '1',
+    'csrf_token'     => (new CsrfTokenizer($plugin->paths, $plugin->filesystem()))->token(PluginRequest::LEVEL_ADMIN, 'admin'),
+], 'POST');
+$t->contains($out, 'where DirectAdmin looks for it', 'the message says where it is going');
+
+$daJob = $plugin->jobs()->recent(1)[0];
+$t->is($daJob->params()['destination'], '/', 'an in-place restore extracts relative to /');
+$t->is($daJob->params()['in_place'] ?? null, true, 'the job records that it restores in place');
+$t->ok($t->waitForJob($plugin, $daJob->id, 180)?->status() === Job::STATUS_SUCCESS, 'the restore completes');
+
+$t->ok(is_file('/home/admin/admin_backups/ghost.tar.gz'), 'the tarball is back where DirectAdmin reads it');
+$t->is(
+    trim((string) @file_get_contents('/home/admin/admin_backups/ghost.tar.gz')),
+    'a user that no longer exists',
+    'its contents are intact'
+);
+
+// DirectAdmin requires these files to belong to admin, and borg extract as root
+// restores the original ownership rather than leaving them owned by root.
+$adminUid = Account::resolve('admin', $plugin->paths)->uid;
+$t->is((int) stat('/home/admin/admin_backups/ghost.tar.gz')['uid'], $adminUid, 'ownership is restored to admin, as DirectAdmin requires');
+
+$t->group('Restoring a home directory in place');
+
+$live = '/home/alice/domains/example.com/public_html/index.html';
+@file_put_contents($live, '<h1>broken</h1>');
+@file_put_contents('/home/alice/added-after-the-backup.txt', 'newer than the archive');
+
+$out = $t->page('admin', 'admin', ['tab' => 'archives', 'archive' => $archive], [
+    'action'     => 'restore_user',
+    'archive'    => $archive,
+    'username'   => 'alice',
+    'in_place'   => '1',
+    'csrf_token' => (new CsrfTokenizer($plugin->paths, $plugin->filesystem()))->token(PluginRequest::LEVEL_ADMIN, 'admin'),
+], 'POST');
+$t->contains($out, 'to its original location', 'an in-place user restore is offered');
+$t->contains($out, 'files added since the backup are left alone', 'the overlay behaviour is stated plainly');
+
+$inPlace = $plugin->jobs()->recent(1)[0];
+$t->is($inPlace->params()['destination'], '/', 'the in-place user restore extracts relative to /');
+$t->ok($t->waitForJob($plugin, $inPlace->id, 180)?->status() === Job::STATUS_SUCCESS, 'the in-place restore completes');
+
+$t->is(trim((string) @file_get_contents($live)), '<h1>alice site</h1>', 'the live file is restored over the damaged one');
+$t->ok(is_file('/home/alice/added-after-the-backup.txt'), 'a file created after the backup survives: a restore is an overlay, not a mirror');
+$t->is((int) stat($live)['uid'], $aliceUid, 'the restored live file still belongs to the account');
+
+$t->group('In-place restores stay scoped');
+
+// The scope is checked when the job is queued, not trusted from the request.
+$adminDirForScope = $plugin->config()->load()->adminBackupsDir();
+$t->ok(
+    !PathGuard::isWithin('/etc/shadow', '/home/alice') && !PathGuard::isWithin('/etc/shadow', $adminDirForScope),
+    'a system path is outside every in-place root'
+);
+
+$out = $t->page('admin', 'admin', ['tab' => 'archives', 'archive' => $archive], [
+    'action'      => 'restore',
+    'archive'     => $archive,
+    'paths'       => ['/etc/passwd'],
+    'destination' => '/',
+    'csrf_token'  => (new CsrfTokenizer($plugin->paths, $plugin->filesystem()))->token(PluginRequest::LEVEL_ADMIN, 'admin'),
+], 'POST');
+$t->contains($out, 'Refusing to restore directly into', 'the free-form restore still cannot target / in place');
 
 $t->group('Restore-a-user guards');
 

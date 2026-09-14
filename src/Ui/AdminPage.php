@@ -8,6 +8,7 @@ use Recranet\DirectAdminBorg\Borg\Archive;
 use Recranet\DirectAdminBorg\Borg\ArchiveEntry;
 use Recranet\DirectAdminBorg\Borg\Repository;
 use Recranet\DirectAdminBorg\Config\Configuration;
+use Recranet\DirectAdminBorg\Exception\BorgPluginException;
 use Recranet\DirectAdminBorg\Http\PluginRequest;
 use Recranet\DirectAdminBorg\Job\Job;
 use Recranet\DirectAdminBorg\Plugin;
@@ -385,14 +386,23 @@ final class AdminPage
             $paths[] = $adminBackup->path;
         }
 
-        $job = $this->queueRestore($archive, $paths, $destination, $username);
+        $inPlace = $this->request->bodyBool('in_place');
+        $scopedRoots = $inPlace ? [$account->home, $config->adminBackupsDir()] : null;
 
-        $this->flash->success(sprintf(
-            'Restoring %s into %s%s. Follow it under Jobs.',
-            $username,
-            $destination,
-            $adminBackup !== null ? ' (home directory and ' . basename($adminBackup->path) . ')' : ' (home directory only)'
-        ));
+        $this->queueRestore($archive, $paths, $destination, $username, $scopedRoots);
+
+        $contents = $adminBackup !== null
+            ? 'home directory and ' . basename($adminBackup->path)
+            : 'home directory only';
+
+        $this->flash->success($inPlace
+            ? sprintf(
+                'Restoring %s (%s) to its original location. Existing files are overwritten; '
+                . 'files added since the backup are left alone. Follow it under Jobs.',
+                $username,
+                $contents
+            )
+            : sprintf('Restoring %s (%s) into %s. Follow it under Jobs.', $username, $contents, $destination));
     }
 
     /**
@@ -436,14 +446,29 @@ final class AdminPage
             return;
         }
 
-        $this->queueRestore($archive, [$adminBackup->path], $destination, $username);
+        // DirectAdmin's restore reads from its own backups directory, so putting
+        // the tarball back where it came from is what makes it show up there.
+        // borg extract runs as root and restores the original ownership, which
+        // DirectAdmin also requires of those files.
+        $toDirectAdmin = $this->request->bodyBool('to_directadmin');
+        $scopedRoots = $toDirectAdmin ? [$config->adminBackupsDir()] : null;
 
-        $this->flash->success(sprintf(
-            'Restoring %s into %s. Once it finishes, use Admin Level -> Restore Backups to recreate the account, '
-            . 'then return here to restore the home directory.',
-            basename($adminBackup->path),
-            $destination
-        ));
+        $this->queueRestore($archive, [$adminBackup->path], $destination, $username, $scopedRoots);
+
+        $this->flash->success($toDirectAdmin
+            ? sprintf(
+                'Restoring %s to %s, where DirectAdmin looks for it. Once it finishes, use '
+                . 'Admin Level -> Restore Backups to recreate the account, then return here to restore the home directory.',
+                basename($adminBackup->path),
+                $config->adminBackupsDir()
+            )
+            : sprintf(
+                'Restoring %s into %s. Copy it to %s and chown it to admin before using '
+                . 'Admin Level -> Restore Backups, then return here to restore the home directory.',
+                basename($adminBackup->path),
+                $destination,
+                $config->adminBackupsDir()
+            ));
     }
 
     /** Where a restore-a-user run writes, defaulting to a staging directory. */
@@ -459,11 +484,54 @@ final class AdminPage
         return (bool) preg_match('/^[a-z_][a-z0-9_-]{0,31}$/i', $username);
     }
 
-    /** @param string[] $paths */
-    private function queueRestore(string $archive, array $paths, string $destination, ?string $username = null): \Recranet\DirectAdminBorg\Job\Job
-    {
-        if (\in_array($destination, self::PROTECTED_DESTINATIONS, true)) {
-            throw new \Recranet\DirectAdminBorg\Exception\BorgPluginException(sprintf(
+    /**
+     * Queue a restore.
+     *
+     * Normally everything is written below a staging directory, keeping its
+     * full original path, and the protected-destination list stops an operator
+     * dropping an old /etc over a running system.
+     *
+     * $scopedRoots switches that off deliberately: when every path being
+     * restored is known to sit inside a named root — one account's home, or the
+     * DirectAdmin backups directory — restoring to the original location is the
+     * correct operation, not an accident. The roots are checked here rather
+     * than trusted from the caller.
+     *
+     * @param string[]      $paths
+     * @param string[]|null $scopedRoots non-null means restore in place
+     */
+    private function queueRestore(
+        string $archive,
+        array $paths,
+        string $destination,
+        ?string $username = null,
+        ?array $scopedRoots = null
+    ): Job {
+        $paths = array_map([PathGuard::class, 'normalize'], $paths);
+
+        if ($scopedRoots !== null) {
+            foreach ($paths as $path) {
+                $within = false;
+                foreach ($scopedRoots as $root) {
+                    if (PathGuard::isWithin($path, $root)) {
+                        $within = true;
+                        break;
+                    }
+                }
+                if (!$within) {
+                    throw new BorgPluginException(sprintf(
+                        'Refusing to restore %s in place: it is outside %s.',
+                        $path,
+                        implode(' and ', $scopedRoots)
+                    ));
+                }
+            }
+
+            // borg strips the leading slash and writes relative to the working
+            // directory, so "/" is what puts a file back where it came from.
+            $destination = '/';
+        } elseif (\in_array($destination, self::PROTECTED_DESTINATIONS, true)) {
+            throw new BorgPluginException(sprintf(
                 'Refusing to restore directly into %s. Restore into a staging directory and move files from there.',
                 $destination
             ));
@@ -471,9 +539,10 @@ final class AdminPage
 
         $job = $this->plugin->jobs()->create(Job::TYPE_RESTORE, $this->request->username, array_filter([
             'archive'      => $archive,
-            'paths'        => array_map([PathGuard::class, 'normalize'], $paths),
+            'paths'        => $paths,
             'destination'  => $destination,
             'restore_user' => $username,
+            'in_place'     => $scopedRoots !== null ? true : null,
             'trigger'      => 'manual',
         ], static fn ($value) => $value !== null));
 

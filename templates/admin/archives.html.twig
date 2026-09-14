@@ -40,6 +40,16 @@
                     </div>
                 </div>
 
+                <div class="borg-field">
+                    <label><input type="checkbox" name="in_place" value="1">Restore to the original location instead</label>
+                    <span class="borg-hint">
+                        Writes straight into the account's home directory and
+                        <span class="borg-mono">{{ user_restore.admin_backups_dir }}</span>, ignoring the staging
+                        path above. Existing files are <strong>overwritten</strong>; files created since the
+                        backup are left in place, so this is an overlay rather than an exact mirror.
+                    </span>
+                </div>
+
                 <div class="borg-actions">
                     <button class="borg-btn borg-btn-primary" type="submit">Restore user</button>
                 </div>
@@ -60,12 +70,28 @@
                     <p class="borg-note" style="margin-top:0">
                         This plugin does not create accounts. To bring
                         <span class="borg-mono">{{ user_restore.missing_account }}</span> back:
-                        restore its DirectAdmin backup, recreate the account with
-                        <strong>Admin Level &rarr; Restore Backups</strong>, then restore the home directory here.
                     </p>
+                    <ol class="borg-note" style="margin-top:4px">
+                        <li>Restore its DirectAdmin backup into
+                            <span class="borg-mono">{{ user_restore.admin_backups_dir }}</span> with the button below.</li>
+                        <li>Recreate the account from it with <strong>Admin Level &rarr; Restore Backups</strong>.
+                            That is what creates the user, its databases and its configuration.</li>
+                        <li>Come back to this archive and restore the home directory.</li>
+                    </ol>
 
-                    <button class="borg-btn" type="submit">
-                        Restore only {{ user_restore.missing_account }}'s DirectAdmin backup
+                    <div class="borg-field">
+                        <label>
+                            <input type="checkbox" name="to_directadmin" value="1" checked>
+                            Place it in {{ user_restore.admin_backups_dir }} where DirectAdmin looks for it
+                        </label>
+                        <span class="borg-hint">
+                            Restored with its original ownership, which DirectAdmin requires of these files.
+                            Untick to write it to the staging path instead and move it yourself.
+                        </span>
+                    </div>
+
+                    <button class="borg-btn borg-btn-primary" type="submit">
+                        Restore {{ user_restore.missing_account }}'s DirectAdmin backup
                     </button>
                 </form>
             {% endif %}

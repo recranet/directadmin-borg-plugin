@@ -138,6 +138,32 @@ covers — but only if a DirectAdmin backup run has actually happened. Enable
 **“Also run after DirectAdmin's own backups finish”** so a borg archive is taken
 once those files exist, and the two stay in step.
 
+### What a borg "version" is
+
+There are no version numbers. A borg repository holds **archives**, and each
+archive is a complete, named snapshot of everything the source paths contained
+at the moment it ran. Deduplication means a snapshot only stores the chunks that
+changed, so a hundred daily archives cost far less than a hundred copies — but
+each one still restores independently and in full. There is no chain of
+increments to replay.
+
+Two separate things carry the date, which is worth keeping straight:
+
+- **The archive name** comes from the name template, e.g.
+  `{hostname}-{now:%Y-%m-%d_%H:%M:%S}` → `srv01-2026-09-14_03:30:00`. It is only
+  a label. Change the template and old archives keep their old names.
+- **The creation timestamp** is recorded by borg itself, independent of the
+  name, and cannot be spoofed by renaming.
+
+This plugin sorts and displays by the recorded timestamp, not the name, so a
+changed template never disturbs the ordering. The user-level page shows only
+dates for that reason; the admin pages show both.
+
+"Restore this borg version" therefore means "restore from this archive", and
+because archives are independent snapshots you can restore a user's home
+directory and their DirectAdmin backup from the *same* archive and know the two
+are consistent with each other.
+
 ### Retention
 
 Pruning runs after each backup, inside the same repository lock, scoped to the
@@ -176,6 +202,34 @@ while being unable to restore an account.
 
 Because the tarballs live under `/home/admin`, they are admin-only. A customer's
 self-service restore cannot see or fetch them.
+
+#### Recovering a user deleted a week ago
+
+The full sequence, because the order is not obvious and each step depends on the
+one before:
+
+1. **Archives** → pick the archive from before the deletion. The list shows the
+   date each one was taken.
+2. **Restore a whole user** → enter the username. The account is gone, so the
+   home-directory restore is refused and you are prompted instead.
+3. Click **Restore `<user>`'s DirectAdmin backup**. With *“Place it in
+   /home/admin/admin_backups”* ticked (the default) the tarball goes straight
+   back to where DirectAdmin reads it, with its original ownership — which
+   DirectAdmin requires of those files. No copying or `chown` by hand.
+4. **Admin Level → Restore Backups** → restore that tarball. *This* is what
+   recreates the account, its databases and its DirectAdmin configuration. The
+   plugin never creates accounts.
+5. Back in **Archives → Restore a whole user**, enter the username again. Now
+   that the account exists, tick **Restore to the original location** to put the
+   home directory back in place.
+
+Step 5 is an overlay, not a mirror: files in the archive are written over what
+is there now, and anything created since the backup is left alone. borg cannot
+delete files during an extract. For a freshly recreated account the home is
+effectively empty, so the result is exact.
+
+Leave *“Restore to the original location”* unticked to get a staging copy under
+`/home/admin/borg_restore/` instead and inspect it before committing.
 
 #### If the account no longer exists
 
@@ -292,7 +346,7 @@ make test
 Builds a container pinned to **PHP 8.1** (matching the native CLI on the target
 servers, so 8.2+ syntax cannot sneak in) with a real borg and a `/home`
 containing two customer accounts at DirectAdmin's `0711` permissions. It then
-installs the plugin with the production `install.sh` and runs 226 checks,
+installs the plugin with the production `install.sh` and runs 244 checks,
 driving the real entry points the way DirectAdmin does — environment in, stdout
 out.
 
