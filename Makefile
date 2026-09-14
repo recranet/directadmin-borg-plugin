@@ -25,7 +25,7 @@ install:
 check: stan cs lint test
 
 stan:
-	$(PHP) vendor/bin/phpstan analyse --no-progress
+	$(PHP) vendor/bin/phpstan analyse --no-progress --memory-limit=1G
 
 cs:
 	$(PHP) vendor/bin/php-cs-fixer fix --dry-run --diff --show-progress=none

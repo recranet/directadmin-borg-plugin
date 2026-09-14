@@ -154,7 +154,14 @@ $t->group('borg availability');
 $runner = new BorgRunner(BorgRunner::locateBinary(), '/root');
 $t->ok($runner->isInstalled(), 'borg is installed: ' . ($runner->version() ?? 'n/a'));
 $t->notOk($runner->isUnsupportedMajor(), 'borg major version is supported (1.x)');
-$t->ok($runner->supportsGlobArchives(), 'borg supports --glob-archives (1.2+)');
+// Which pruning flag is correct depends on the borg present, so the suite
+// follows the same feature detection the plugin does rather than pinning a
+// version. AlmaLinux 8's EPEL still carries 1.1.
+$modernBorg = $runner->supportsGlobArchives();
+$t->ok(
+    $modernBorg === version_compare((string) $runner->version(), '1.2.0', '>='),
+    'glob-archives support matches the installed borg (' . $runner->version() . ')'
+);
 
 $t->group('Repository lifecycle');
 
@@ -424,8 +431,14 @@ $pruneArguments = $plugin->repository()->pruneArguments();
 $t->ok($pruneArguments !== null, 'prune arguments are produced');
 $t->ok(in_array('--keep-daily=1', $pruneArguments, true), 'retention is passed to borg');
 $t->notOk(in_array('--keep-weekly=0', $pruneArguments, true), 'rules set to 0 are omitted');
-$t->ok(in_array('--glob-archives', $pruneArguments, true), 'pruning is scoped to this plugin\'s archive prefix');
-$t->ok(in_array('test-*', $pruneArguments, true), 'the prefix glob matches the configured prefix');
+$t->ok(
+    in_array($modernBorg ? '--glob-archives' : '--prefix', $pruneArguments, true),
+    'pruning is scoped to this plugin\'s archive prefix, with the flag this borg understands'
+);
+$t->ok(
+    in_array($modernBorg ? 'test-*' : 'test-', $pruneArguments, true),
+    'the prefix is passed in the form this borg expects'
+);
 
 $pruneJob = $plugin->jobs()->create(Job::TYPE_PRUNE, 'test', []);
 $exit = $runJob($pruneJob);

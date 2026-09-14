@@ -85,7 +85,7 @@ Admin Level → Plugin Manager → Add Plugin → upload `borg-<version>.tar.gz`
 Or from a shell:
 
 ```sh
-tar -xzf borg-1.3.0.tar.gz -C /usr/local/directadmin/plugins/
+tar -xzf borg-1.3.1.tar.gz -C /usr/local/directadmin/plugins/
 sh /usr/local/directadmin/plugins/borg/scripts/install.sh
 ```
 
@@ -96,7 +96,7 @@ directory.
 **From a source checkout**, build the tarball first:
 
 ```sh
-make package      # -> dist/borg-1.3.0.tar.gz
+make package      # -> dist/borg-1.3.1.tar.gz
 ```
 
 ---
@@ -390,15 +390,34 @@ working tree.
 ## Testing
 
 ```sh
-make test
+make test              # every environment
+test/docker-test.sh alma9     # just one
 ```
 
-Builds a container pinned to **PHP 8.1** (matching the native CLI on the target
-servers, so 8.2+ syntax cannot sneak in) with a real borg and a `/home`
-containing two customer accounts at DirectAdmin's `0711` permissions. It then
-installs the plugin with the production `install.sh` and runs 349 checks,
-driving the real entry points the way DirectAdmin does — environment in, stdout
-out.
+The suite runs against four environments, because the plugin has to work across
+what is actually deployed:
+
+| Environment | PHP | borg | Why |
+|---|---|---|---|
+| `alma9` | 8.1 | 1.2.9 | The most likely production shape |
+| `alma8` | 8.1 | **1.1.18** | Still widely deployed; EPEL 8 carries borg 1.1 |
+| `borg12` | 8.1 | 1.2.4 | Debian stable |
+| `borg14` | 8.1 | **1.4.5** | Current upstream stable |
+
+That spread is the point. borg 1.1 prunes with `--prefix` and has no `compact`
+command; 1.2 renamed the flag to `--glob-archives` and added compaction. The
+plugin feature-detects rather than assuming, and `alma8` is what proves the
+older branch works against a real borg 1.1 rather than a stub.
+
+PHP is pinned to **8.1** everywhere, matching the native CLI on the target
+servers, so 8.2+ syntax cannot slip through. On the EL images it comes from Remi,
+since AlmaLinux 8's AppStream has no 8.1 stream at all.
+
+Each image carries a real borg and a `/home` with two customer accounts at
+DirectAdmin's `0711` permissions, plus DirectAdmin-style admin backups, an sshd
+for remote-repository tests, and a stub borg for version-branch tests. Each run
+installs the plugin with the production `install.sh` and then drives the real
+entry points the way DirectAdmin does — environment in, stdout out.
 
 No DirectAdmin server is involved, and nothing outside the container is touched.
 

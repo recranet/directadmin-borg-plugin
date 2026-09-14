@@ -1,14 +1,60 @@
+# One service per environment the plugin has to work in.
+#
+# DirectAdmin servers are predominantly EL, so AlmaLinux 8 and 9 are the images
+# that matter most; the Debian ones cover the other half of the estate and pin
+# the borg version range. borg differs across them in pruning flags and in
+# having a compact command, which the plugin feature-detects rather than
+# assumes — these images are what check that it detects correctly.
+
+x-common: &common
+  volumes:
+    # The plugin source, read by the driver and copied to the real plugin path.
+    - ../..:/plugin
+  working_dir: /plugin
+  tmpfs:
+    - /run
+  command: ["test/run-tests.sh"]
+
 services:
-  plugin-test:
+  # AlmaLinux 9 with EPEL borg: the most likely production shape.
+  alma9:
+    <<: *common
+    build:
+      context: .
+      dockerfile: Dockerfile.el
+      args:
+        EL_VERSION: "9"
+        PHP_STREAM: "8.1"
+    image: directadmin-borg-plugin-test:alma9
+
+  # AlmaLinux 8, still widely deployed and carrying an older EPEL borg.
+  alma8:
+    <<: *common
+    build:
+      context: .
+      dockerfile: Dockerfile.el
+      args:
+        EL_VERSION: "8"
+        PHP_STREAM: "8.1"
+    image: directadmin-borg-plugin-test:alma8
+
+  # Debian stable's borg (1.2.x).
+  borg12:
+    <<: *common
     build:
       context: .
       dockerfile: Dockerfile
-    image: directadmin-borg-plugin-test
-    volumes:
-      # The plugin source, mounted read-write so install.sh can rewrite shebangs.
-      - ../..:/plugin
-    working_dir: /plugin
-    # borg needs a writable /tmp and enough memory for its cache; nothing else.
-    tmpfs:
-      - /run
-    command: ["test/run-tests.sh"]
+      args:
+        BORG_SOURCE: apt
+    image: directadmin-borg-plugin-test:borg12
+
+  # Current upstream stable (1.4.x), which no Debian release carries yet.
+  borg14:
+    <<: *common
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BORG_SOURCE: pip
+        BORG_VERSION: "1.4.5"
+    image: directadmin-borg-plugin-test:borg14

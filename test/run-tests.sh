@@ -56,7 +56,8 @@ echo "    all plugin sources parse on PHP $(php -r 'echo PHP_VERSION;')"
 # analysing it would load a second identical autoloader.
 if [ -f "$SRC_DIR/vendor/bin/phpstan" ]; then
     echo "==> PHPStan"
-    (cd "$SRC_DIR" && php vendor/bin/phpstan analyse --no-progress)
+    # EL ships a 128M CLI memory_limit by default, which PHPStan exceeds.
+    (cd "$SRC_DIR" && php vendor/bin/phpstan analyse --no-progress --memory-limit=1G)
 else
     echo "==> PHPStan skipped (dev dependencies not installed)"
 fi
