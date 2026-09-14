@@ -1,8 +1,9 @@
 # One service per environment the plugin has to work in.
 #
 # All AlmaLinux, because that is what DirectAdmin servers run. The axes that
-# actually change behaviour are the PHP version and the borg version, so the
-# three images span both rather than repeating one combination on two distros.
+# actually change behaviour are the PHP version and the borg version. PHP is 8.2
+# throughout; the 8.1 floor the plugin still declares is held by `make lint` and
+# `make stan`, which run on 8.1 so syntax newer than that cannot slip in.
 #
 # borg 1.1 prunes with --prefix and has no compact command; 1.2 renamed the flag
 # to --glob-archives and added compaction. The plugin feature-detects rather than
@@ -18,7 +19,7 @@ x-common: &common
   command: ["test/run-tests.sh"]
 
 services:
-  # PHP 8.1, the oldest version supported, with EPEL 9's borg.
+  # EPEL 9's borg, on the PHP the estate is standardising on.
   alma9:
     <<: *common
     build:
@@ -26,7 +27,7 @@ services:
       dockerfile: Dockerfile.el
       args:
         EL_VERSION: "9"
-        PHP_STREAM: "8.1"
+        PHP_STREAM: "8.2"
         BORG_SOURCE: epel
     image: directadmin-borg-plugin-test:alma9
 

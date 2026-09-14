@@ -85,7 +85,7 @@ Admin Level → Plugin Manager → Add Plugin → upload `borg-<version>.tar.gz`
 Or from a shell:
 
 ```sh
-tar -xzf borg-1.3.2.tar.gz -C /usr/local/directadmin/plugins/
+tar -xzf borg-1.3.3.tar.gz -C /usr/local/directadmin/plugins/
 sh /usr/local/directadmin/plugins/borg/scripts/install.sh
 ```
 
@@ -96,7 +96,7 @@ directory.
 **From a source checkout**, build the tarball first:
 
 ```sh
-make package      # -> dist/borg-1.3.2.tar.gz
+make package      # -> dist/borg-1.3.3.tar.gz
 ```
 
 ---
@@ -405,7 +405,7 @@ dnf -y install borgbackup
 
 | Environment | PHP | borg | Why |
 |---|---|---|---|
-| `alma9` | 8.1 | 1.2.9 (EPEL 9) | The common production shape, on the oldest PHP supported |
+| `alma9` | 8.2 | 1.2.9 (EPEL 9) | The common production shape |
 | `alma8` | 8.2 | **1.1.18** (EPEL 8) | Still widely deployed, and the only place borg 1.1 still ships |
 | `alma9-borg14` | 8.2 | 1.4.5 (pip) | **Opt-in.** Not in the default run |
 
@@ -413,7 +413,12 @@ The spread across those two axes is the point. borg 1.1 prunes with `--prefix`
 and has no `compact` command; 1.2 renamed the flag to `--glob-archives` and
 added compaction. The plugin feature-detects rather than assuming, and `alma8`
 is what proves the older branch works against a real borg 1.1 rather than a
-stub. PHP spans 8.1, the supported floor, to 8.2.
+stub.
+
+PHP is 8.2 on both, which is what the servers run. The plugin still declares
+8.1 as its floor, and that floor is held by `make lint` and `make stan`, which
+run on 8.1 — so syntax newer than the minimum cannot slip in even though nothing
+in the matrix runs it.
 
 `alma9-borg14` is excluded from the default run on purpose: no EL repository
 carries borg 1.4, so installing it means pip and a build toolchain, which is not
