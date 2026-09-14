@@ -189,22 +189,6 @@ final class JobRepository
         return $removed;
     }
 
-    /**
-     * A queued or running job whose files have not changed for an hour.
-     *
-     * A worker killed mid-run (OOM, reboot) would otherwise leave a job that
-     * looks active forever and block every later run.
-     */
-    public function isStale(Job $job): bool
-    {
-        $heartbeat = max(
-            (int) @filemtime($this->paths->jobFile($job->id)),
-            (int) @filemtime($this->paths->logFile($job->id)),
-        );
-
-        return $heartbeat > 0 && (time() - $heartbeat) > 3600;
-    }
-
     private function persist(Job $job): void
     {
         $this->filesystem->dumpFile(

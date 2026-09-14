@@ -16,6 +16,7 @@ require_once __DIR__ . '/lib/Harness.php';
 require_once __DIR__ . '/lib/PrivilegeProbe.php';
 
 use Recranet\DirectAdminBorg\Borg\BorgRunner;
+use Recranet\DirectAdminBorg\Borg\Repository;
 use Recranet\DirectAdminBorg\Config\Configuration;
 use Recranet\DirectAdminBorg\Http\PluginRequest;
 use Recranet\DirectAdminBorg\Job\Job;
@@ -847,6 +848,367 @@ $t->is(Format::bytes(null), '-', 'formats a missing size');
 $t->is(Format::dateTime(''), '-', 'formats a missing timestamp');
 $t->is(Format::age(''), 'never', 'formats a missing age');
 $t->is(Format::currentUid(), 0, 'the suite runs as root, like the plugin does');
+
+// ======================================================= admin POST actions
+
+$t->group('Admin actions, driven through the form');
+
+$post = static function (array $body, array $query = []) use ($t, $plugin) {
+    return $t->page('admin', 'admin', $query, array_merge([
+        'csrf_token' => (new CsrfTokenizer($plugin->paths, $plugin->filesystem()))->token(PluginRequest::LEVEL_ADMIN, 'admin'),
+    ], $body), 'POST');
+};
+
+// Every action is reachable only by its exact name, so a typo in a form would
+// otherwise ship green.
+$t->contains($post(['action' => 'no_such_action']), 'Unknown action', 'an unrecognised action is rejected');
+
+$out = $post([
+    'action'      => 'save_repository',
+    'repository'  => '/backup/test-repo',
+    'encryption'  => 'none',
+    'ssh_command' => '',
+]);
+$t->contains($out, 'Repository settings saved', 'save_repository works through the form');
+$t->is($plugin->config()->load()->repository(), '/backup/test-repo', 'the repository was written');
+
+$t->contains(
+    $post(['action' => 'save_repository', 'repository' => 'nonsense value']),
+    'must be an absolute path',
+    'save_repository surfaces validation errors'
+);
+
+$out = $post([
+    'action'           => 'save_backup',
+    'source_paths'     => "/home\n/etc/passwd",
+    'exclude_patterns' => 'sh:/home/*/.cache/**',
+    'compression'      => 'lz4',
+    'archive_name'     => 'test-{now:%Y-%m-%d_%H:%M:%S.%f}',
+    'archive_prefix'   => 'test-',
+    'keep_daily'       => '7',
+    'keep_weekly'      => '0',
+    'keep_monthly'     => '0',
+    'schedule_hour'    => '4',
+    'schedule_minute'  => '15',
+    'user_restore_dir' => 'borg_restore',
+]);
+$t->contains($out, 'Backup settings saved', 'save_backup works through the form');
+$t->is($plugin->config()->load()->compression(), 'lz4', 'the compression was written');
+$t->is($plugin->config()->load()->scheduleHour(), '4', 'the schedule was written');
+// Unticked checkboxes are absent from a form post, which must read as false.
+$t->notOk($plugin->config()->load()->scheduleEnabled(), 'an unticked checkbox saves as off');
+
+$t->contains(
+    $post(['action' => 'save_backup', 'source_paths' => 'relative', 'compression' => 'lz4']),
+    'must be absolute',
+    'save_backup surfaces validation errors'
+);
+
+$t->contains($post(['action' => 'init_repository']), 'already exists', 'init_repository reports an existing repository rather than failing');
+
+$out = $post(['action' => 'run_backup']);
+$t->contains($out, 'Backup started', 'run_backup queues a job');
+$t->ok($t->waitForJob($plugin, $plugin->jobs()->recent(1)[0]->id, 180)?->isFinished() === true, 'the queued backup finishes');
+
+$out = $post(['action' => 'run_prune']);
+$t->contains($out, 'Prune started', 'run_prune queues a job');
+$t->ok($t->waitForJob($plugin, $plugin->jobs()->recent(1)[0]->id, 180)?->isFinished() === true, 'the queued prune finishes');
+
+$out = $post(['action' => 'run_check']);
+$t->contains($out, 'Check started', 'run_check queues a job');
+$checkJob = $t->waitForJob($plugin, $plugin->jobs()->recent(1)[0]->id, 300);
+$t->is($checkJob?->status(), Job::STATUS_SUCCESS, 'the repository check passes: ' . ($checkJob?->message() ?? ''));
+
+$t->contains($post(['action' => 'break_lock']), 'Repository lock released', 'break_lock runs');
+
+$t->group('Deleting an archive');
+
+$before = $plugin->repository()->listArchives()['archives'];
+$t->ok(count($before) >= 2, 'more than one archive exists to delete from');
+$victim = $before[0]->name;
+
+$t->contains(
+    $post(['action' => 'delete_archive', 'archive' => $victim, 'confirm' => 'wrong']),
+    'Type the archive name exactly',
+    'a wrong confirmation does not delete'
+);
+$t->is(
+    count($plugin->repository()->listArchives()['archives']),
+    count($before),
+    'nothing was deleted by the failed confirmation'
+);
+
+$t->contains(
+    $post(['action' => 'delete_archive', 'archive' => '', 'confirm' => '']),
+    'No archive selected',
+    'an empty archive name is rejected'
+);
+
+$out = $post(['action' => 'delete_archive', 'archive' => $victim, 'confirm' => $victim]);
+$t->contains($out, 'deleted', 'a confirmed deletion runs');
+
+$after = array_map(static fn ($a) => $a->name, $plugin->repository()->listArchives()['archives']);
+$t->notOk(in_array($victim, $after, true), 'the archive is gone');
+$t->is(count($after), count($before) - 1, 'exactly one archive was removed');
+
+// ============================================ encrypted repository, end to end
+
+$t->group('Encrypted repository');
+
+$encRepo = '/backup/encrypted-repo';
+$plugin->filesystem()->remove($encRepo);
+
+$plugin->config()->save(['repository' => $encRepo, 'encryption' => 'repokey-blake2']);
+$plugin->config()->setPassphrase('correct horse battery staple');
+
+$t->ok($plugin->config()->load()->requiresPassphrase(), 'repokey-blake2 needs a passphrase');
+$t->ok($plugin->config()->load()->hasPassphrase(), 'the passphrase is stored');
+
+$encInit = $plugin->repository()->initialize();
+$t->ok($encInit->isSuccessful(), 'an encrypted repository initialises: ' . ($encInit->isSuccessful() ? 'ok' : $encInit->errorMessage()));
+
+$encJob = $plugin->jobs()->create(Job::TYPE_BACKUP, 'test', ['prune' => false]);
+$runJob($encJob);
+$encJob = $plugin->jobs()->find($encJob->id);
+$t->ok(
+    in_array($encJob->status(), [Job::STATUS_SUCCESS, Job::STATUS_WARNING], true),
+    'a backup to an encrypted repository succeeds: ' . $encJob->message()
+);
+
+$encArchives = $plugin->repository()->listArchives();
+$t->ok($encArchives['result']->isSuccessful(), 'the encrypted repository can be listed with the stored passphrase');
+$t->is(count($encArchives['archives']), 1, 'the encrypted archive is there');
+
+// The passphrase must travel in the environment, never as an argument, or it
+// would be visible in ps output to every user on the server.
+$t->notContains($encArchives['result']->commandLine, 'correct horse', 'the passphrase is not on the command line');
+
+$encRestore = $plugin->jobs()->create(Job::TYPE_RESTORE, 'alice', [
+    'archive'     => $encArchives['archives'][0]->name,
+    'paths'       => ['/home/alice/.my.cnf'],
+    'destination' => '/home/alice/borg_restore_enc',
+    'chown_to'    => 'alice',
+]);
+$runJob($encRestore);
+$t->is($plugin->jobs()->find($encRestore->id)->status(), Job::STATUS_SUCCESS, 'restoring from an encrypted repository works');
+$t->is(
+    trim((string) @file_get_contents('/home/alice/borg_restore_enc/home/alice/.my.cnf')),
+    'alice db password',
+    'the decrypted content is correct'
+);
+
+// Without the passphrase the repository is unreadable, which is the point.
+$plugin->config()->setPassphrase('');
+$t->notOk($plugin->repository()->listArchives()['result']->isSuccessful(), 'the repository is unreadable without the passphrase');
+$plugin->config()->setPassphrase('correct horse battery staple');
+
+// ============================================================ remote over SSH
+
+$t->group('Remote repository over SSH');
+
+$sshUp = @fsockopen('127.0.0.1', 22, $errno, $errstr, 2);
+if ($sshUp === false) {
+    $t->ok(true, 'SKIPPED: no sshd reachable in this container');
+} else {
+    fclose($sshUp);
+
+    $plugin->filesystem()->remove('/backup/remote-repo');
+    $plugin->config()->save([
+        'repository'  => 'ssh://root@localhost:22/backup/remote-repo',
+        'encryption'  => 'none',
+        'ssh_command' => 'ssh -i /root/.ssh/borg_ed25519 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null',
+    ]);
+    $plugin->config()->setPassphrase('');
+
+    $remoteInit = $plugin->repository()->initialize();
+    $t->ok($remoteInit->isSuccessful(), 'a remote repository initialises over ssh:// : ' . ($remoteInit->isSuccessful() ? 'ok' : $remoteInit->errorMessage()));
+
+    $remoteJob = $plugin->jobs()->create(Job::TYPE_BACKUP, 'test', ['prune' => false]);
+    $runJob($remoteJob);
+    $remoteJob = $plugin->jobs()->find($remoteJob->id);
+    $t->ok(
+        in_array($remoteJob->status(), [Job::STATUS_SUCCESS, Job::STATUS_WARNING], true),
+        'a backup to a remote repository succeeds: ' . $remoteJob->message()
+    );
+
+    $remoteArchives = $plugin->repository()->listArchives();
+    $t->ok($remoteArchives['result']->isSuccessful(), 'the remote repository can be listed');
+    $t->is(count($remoteArchives['archives']), 1, 'the remote archive is there');
+}
+
+// Back to the local repository for anything that follows.
+$plugin->config()->save(['repository' => '/backup/test-repo', 'encryption' => 'none', 'ssh_command' => '']);
+$plugin->config()->setPassphrase('');
+
+// ====================================================== older borg (1.1) args
+
+$t->group('borg 1.1 compatibility');
+
+// A stub that reports 1.1, so the --prefix branch is covered without a second
+// borg installation. Only argument shape is asserted; nothing is executed.
+$stub = '/usr/local/bin/borg-1.1-stub';
+if (is_executable($stub)) {
+    $oldRunner = new BorgRunner($stub, '/root');
+    $t->is($oldRunner->version(), '1.1.18', 'the stub reports borg 1.1');
+    $t->notOk($oldRunner->supportsGlobArchives(), 'borg 1.1 does not support --glob-archives');
+    $t->notOk($oldRunner->supportsCompact(), 'borg 1.1 has no compact command');
+
+    $oldRepo = new Repository($oldRunner, $plugin->config()->load()->withValues([
+        'prune_enabled'  => true,
+        'archive_prefix' => 'test-',
+        'keep_daily'     => 7,
+    ]));
+
+    $oldArgs = $oldRepo->pruneArguments();
+    $t->ok(in_array('--prefix', $oldArgs, true), 'borg 1.1 prunes with --prefix');
+    $t->ok(in_array('test-', $oldArgs, true), 'the prefix is passed without a glob');
+    $t->notOk(in_array('--glob-archives', $oldArgs, true), 'the 1.2 flag is not used on 1.1');
+} else {
+    $t->ok(true, 'SKIPPED: no borg 1.1 stub in this container');
+}
+
+// ================================================== truncated directory listing
+
+$t->group('Oversized directory listings');
+
+// The cap exists so a home directory with tens of thousands of files cannot
+// stall the page; forcing a small limit exercises it without building one.
+$capped = $plugin->repository()->listDirectory($archive, '/home/alice', 2);
+$t->ok($capped->truncated, 'a directory larger than the cap is reported as truncated');
+$t->ok(count($capped->entries) <= 3, 'the listing stops at the cap');
+
+$uncapped = $plugin->repository()->listDirectory($archive, '/home/alice');
+$t->notOk($uncapped->truncated, 'the same directory is not truncated at the normal cap');
+
+$t->contains(
+    $t->page('admin', 'admin', ['tab' => 'archives', 'archive' => $archive, 'path' => '/home/alice']),
+    'alice',
+    'the browse page still renders for that directory'
+);
+
+// ================================================================ job cleanup
+
+$t->group('Job retention');
+
+$oldJob = $plugin->jobs()->create(Job::TYPE_CHECK, 'retention-test', []);
+$jobFile = $plugin->paths->jobFile($oldJob->id);
+$logFile = $plugin->paths->logFile($oldJob->id);
+$t->ok(is_file($jobFile) && is_file($logFile), 'a job writes a record and a log');
+
+// Backdate it past the retention window.
+@touch($jobFile, time() - (40 * 86400));
+@touch($logFile, time() - (40 * 86400));
+
+$removed = $plugin->jobs()->purgeOlderThan(30);
+$t->ok($removed >= 1, 'purging removes records older than the window');
+$t->notOk(is_file($jobFile), 'the old job record is gone');
+$t->notOk(is_file($logFile), 'its log is gone too');
+$t->ok($plugin->jobs()->find($oldJob->id) === null, 'the purged job is no longer findable');
+
+$recentJob = $plugin->jobs()->create(Job::TYPE_CHECK, 'retention-test', []);
+$plugin->jobs()->purgeOlderThan(30);
+$t->ok($plugin->jobs()->find($recentJob->id) !== null, 'a recent job survives purging');
+
+// ================================================================= long logs
+
+$t->group('Large job logs');
+
+$logJob = $plugin->jobs()->create(Job::TYPE_CHECK, 'log-test', []);
+for ($i = 1; $i <= 4000; ++$i) {
+    $plugin->jobs()->appendLog($logJob, 'line ' . $i . str_repeat(' padding', 4) . "\n");
+}
+$tail = $plugin->jobs()->tail($logJob, 50);
+$lines = explode("\n", trim($tail));
+
+$t->is(count($lines), 50, 'the tail returns the requested number of lines');
+$t->contains($tail, 'line 4000', 'the tail ends at the newest line');
+$t->notContains($tail, 'line 3000', 'older lines are not included');
+// Seeking into the middle of a large file lands mid-line; that partial must go.
+$t->ok(str_starts_with(trim($lines[0]), 'line '), 'the first line returned is whole, not a fragment');
+
+// ============================================================ DirectAdmin hook
+
+$t->group('DirectAdmin backup hook');
+
+$plugin->config()->save(['run_after_da_backups' => false]);
+$jobsBeforeHook = count($plugin->jobs()->recent(50));
+
+$hook = $t->exec([$pluginDir . '/hooks/all_backups_post.sh'], $t->environment());
+$t->is($hook['exit'], 0, 'the hook script exits 0 when disabled');
+$t->is(count($plugin->jobs()->recent(50)), $jobsBeforeHook, 'no job is started while the hook is disabled');
+
+$plugin->config()->save(['run_after_da_backups' => true]);
+$hookRun = $t->console(['borg:hook-backup', 'all_backups_post']);
+$t->is($hookRun['exit'], 0, 'borg:hook-backup exits 0 when enabled');
+$t->contains($hookRun['stdout'], 'Started job', 'it starts a backup');
+
+$hookJob = $plugin->jobs()->recent(1)[0];
+$t->is($hookJob->owner(), 'hook', 'the job records that a hook started it');
+$t->is($hookJob->params()['trigger'] ?? null, 'all_backups_post', 'the job records which hook');
+$t->ok($t->waitForJob($plugin, $hookJob->id, 180)?->isFinished() === true, 'the hook-started backup finishes');
+
+// A hook must never fail the DirectAdmin operation that called it, whatever
+// goes wrong underneath. An empty repository cannot be saved (validation
+// rejects it), so point it at a path with no repository in it instead.
+$plugin->config()->save(['repository' => '/backup/does-not-exist']);
+$brokenHook = $t->console(['borg:hook-backup', 'all_backups_post']);
+$t->is($brokenHook['exit'], 0, 'the hook exits 0 even when the backup itself cannot run');
+
+$brokenJob = $t->waitForJob($plugin, $plugin->jobs()->recent(1)[0]->id, 120);
+$t->is($brokenJob?->status(), Job::STATUS_FAILED, 'the failure is recorded on the job, where an operator will see it');
+
+$plugin->config()->save(['repository' => '/backup/test-repo']);
+$plugin->config()->save(['run_after_da_backups' => false]);
+
+$t->group('The lock is free as soon as a job reports finished');
+
+// The UI polls the job record; if the lock outlived the status write, an
+// operator clicking "Back up now" the moment a backup finished would be told
+// another operation was running.
+$lockRace = $plugin->jobs()->create(Job::TYPE_BACKUP, 'lock-race', ['prune' => false]);
+$plugin->dispatcher()->dispatch($lockRace);
+$t->ok($t->waitForJob($plugin, $lockRace->id, 180)?->isFinished() === true, 'a dispatched backup finishes');
+
+$immediate = $plugin->lockFactory()->createLock('borg-repository', 30.0, false);
+$t->ok($immediate->acquire(), 'the repository lock is free the instant the job reads as finished');
+$immediate->release();
+
+// ============================================================ scheduled backup
+
+$t->group('Scheduled backup command');
+
+$scheduled = $t->console(['borg:scheduled-backup', '--trigger', 'cron-test']);
+$t->is($scheduled['exit'], 0, 'borg:scheduled-backup exits cleanly');
+$t->contains($scheduled['stdout'], 'Running job', 'it names the job it runs');
+
+$cronJob = $plugin->jobs()->recent(1)[0];
+$t->is($cronJob->owner(), 'cron', 'the job records that cron started it');
+$t->is($cronJob->params()['trigger'] ?? null, 'cron-test', 'the trigger is recorded');
+$t->ok($cronJob->isFinished(), 'a scheduled backup runs in the foreground, so cron gets the result');
+
+// =============================================================== uninstalling
+
+$t->group('Uninstaller');
+
+$plugin->config()->save(['schedule_enabled' => true]);
+$plugin->cron()->apply($plugin->config()->load());
+$t->ok($plugin->cron()->isInstalled(), 'a schedule exists before uninstalling');
+
+$uninstall = $t->exec(
+    ['/bin/sh', $pluginDir . '/scripts/uninstall.sh'],
+    $t->environment() + ['PATH' => getenv('PATH') ?: '/usr/bin:/bin']
+);
+$t->is($uninstall['exit'], 0, 'uninstall.sh exits cleanly');
+$t->notOk($plugin->cron()->isInstalled(), 'it removes the schedule');
+
+// Deleting a customer's only backup because a plugin was removed is not a
+// decision an uninstaller gets to make.
+$t->ok(is_dir($plugin->paths->dataDir), 'it leaves the plugin state in place');
+$t->ok(is_file($plugin->paths->configFile()), 'it leaves the configuration in place');
+$t->ok(is_dir('/backup/test-repo'), 'it leaves the borg repository alone');
+$t->contains($uninstall['stdout'], 'Left in place on purpose', 'it says what it kept and why');
+
+$plugin->config()->save(['schedule_enabled' => false]);
 
 // =================================================================== verdict
 

@@ -85,7 +85,7 @@ Admin Level → Plugin Manager → Add Plugin → upload `borg-<version>.tar.gz`
 Or from a shell:
 
 ```sh
-tar -xzf borg-1.2.1.tar.gz -C /usr/local/directadmin/plugins/
+tar -xzf borg-1.3.0.tar.gz -C /usr/local/directadmin/plugins/
 sh /usr/local/directadmin/plugins/borg/scripts/install.sh
 ```
 
@@ -96,7 +96,7 @@ directory.
 **From a source checkout**, build the tarball first:
 
 ```sh
-make package      # -> dist/borg-1.2.1.tar.gz
+make package      # -> dist/borg-1.3.0.tar.gz
 ```
 
 ---
@@ -396,7 +396,7 @@ make test
 Builds a container pinned to **PHP 8.1** (matching the native CLI on the target
 servers, so 8.2+ syntax cannot sneak in) with a real borg and a `/home`
 containing two customer accounts at DirectAdmin's `0711` permissions. It then
-installs the plugin with the production `install.sh` and runs 268 checks,
+installs the plugin with the production `install.sh` and runs 349 checks,
 driving the real entry points the way DirectAdmin does — environment in, stdout
 out.
 
@@ -408,6 +408,18 @@ escaping, repository locking, cron file generation, prune scoping, detached
 dispatch, secret handling and file permissions — including the restore-a-user
 flow and its refusal to touch a home directory for an account DirectAdmin does
 not have — and ends with the privilege probe that produced the table above.
+
+It also exercises the parts that are easy to leave untested because they need a
+real environment:
+
+- every admin form action end to end, including the archive deletion guard
+- an **encrypted** repository: init, backup, list, restore, and that the
+  passphrase never reaches a command line
+- a **remote** repository over `ssh://`, against an sshd in the container
+- borg **1.1**'s `--prefix` pruning, via a stub reporting that version, so the
+  older branch is covered without a second borg installation
+- the DirectAdmin hook, the scheduled-backup command, and `uninstall.sh`
+- job retention, oversized directory listings, and log tailing past 64 KB
 
 ---
 

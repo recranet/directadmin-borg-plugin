@@ -11,6 +11,7 @@ use Recranet\DirectAdminBorg\Config\Configuration;
 use Recranet\DirectAdminBorg\Plugin;
 use Recranet\DirectAdminBorg\Security\Account;
 use Recranet\DirectAdminBorg\Security\PathGuard;
+use Symfony\Component\Lock\LockInterface;
 
 /**
  * Executes a job to completion. Runs inside the detached worker process.
@@ -18,6 +19,9 @@ use Recranet\DirectAdminBorg\Security\PathGuard;
 final class JobRunner
 {
     private const LOCK_KEY = 'borg-repository';
+
+    /** Held for the duration of a job that writes to the repository. */
+    private ?LockInterface $lock = null;
 
     public function __construct(
         private readonly Plugin $plugin,
@@ -33,8 +37,6 @@ final class JobRunner
 
         $this->jobs->update($job, ['status' => Job::STATUS_RUNNING, 'started_at' => date('c')]);
 
-        $lock = null;
-
         try {
             if (!$repository->runner()->isInstalled()) {
                 return $this->finish($job, Job::STATUS_FAILED, 127, \sprintf(
@@ -49,8 +51,10 @@ final class JobRunner
             // Restores only read, so they may run alongside a backup; every
             // other type writes and must hold the repository lock.
             if (\in_array($job->type(), Job::EXCLUSIVE_TYPES, true)) {
-                $lock = $this->plugin->lockFactory()->createLock(self::LOCK_KEY, 86400.0, false);
-                if (!$lock->acquire()) {
+                $this->lock = $this->plugin->lockFactory()->createLock(self::LOCK_KEY, 86400.0, false);
+                if (!$this->lock->acquire()) {
+                    $this->lock = null;
+
                     return $this->finish($job, Job::STATUS_FAILED, 75, 'Another repository operation is already running.');
                 }
             }
@@ -73,7 +77,9 @@ final class JobRunner
 
             return $this->finish($job, Job::STATUS_FAILED, 1, $e->getMessage());
         } finally {
-            $lock?->release();
+            // Normally already released by finish(); this is the path where an
+            // exception escaped before it ran.
+            $this->releaseLock();
             $this->jobs->purgeOlderThan(30);
         }
     }
@@ -350,10 +356,21 @@ final class JobRunner
         $this->jobs->appendLog($job, \sprintf("[%s] %s\n", date('Y-m-d H:i:s'), rtrim($line, "\n")));
     }
 
+    private function releaseLock(): void
+    {
+        $this->lock?->release();
+        $this->lock = null;
+    }
+
     /** @param array<string,mixed>|null $stats */
     private function finish(Job $job, string $status, int $exitCode, string $message, ?array $stats = null): int
     {
         $this->log($job, $message);
+
+        // Release before the job is marked finished, not after. Otherwise there
+        // is a window where the UI shows a completed backup while the lock is
+        // still held, and the next run is refused as "already running".
+        $this->releaseLock();
 
         $this->jobs->update($job, [
             'status'      => $status,

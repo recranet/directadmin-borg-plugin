@@ -17,6 +17,13 @@ fi
 
 echo "==> PHP $(php -r 'echo PHP_VERSION;') / $(borg --version 2>/dev/null || echo 'borg missing')"
 
+# Remote-repository tests need a reachable SSH target; without one they skip.
+if command -v sshd >/dev/null 2>&1; then
+    mkdir -p /var/run/sshd
+    /usr/sbin/sshd 2>/dev/null || true
+    ssh-keyscan -H localhost >> /root/.ssh/known_hosts 2>/dev/null || true
+fi
+
 echo "==> Staging the plugin into $PLUGIN_DIR"
 rm -rf "$PLUGIN_DIR"
 mkdir -p "$(dirname "$PLUGIN_DIR")"

@@ -17,6 +17,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         procps \
         util-linux \
         cron \
+        openssh-server \
+        openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 # The official php image already installs PHP at /usr/local/bin/php, which is
@@ -57,6 +59,21 @@ RUN mkdir -p /home/admin/admin_backups \
     && echo 'a user that no longer exists' > /home/admin/admin_backups/ghost.tar.gz \
     && chown -R admin:admin /home/admin/admin_backups \
     && chmod 0700 /home/admin/admin_backups
+
+# An SSH server so remote repositories (ssh://user@host/path) can be exercised
+# for real rather than only validated as strings. Key-only, localhost, root --
+# the same shape as a real borg backup target.
+RUN mkdir -p /var/run/sshd /root/.ssh \
+    && ssh-keygen -q -t ed25519 -N '' -f /root/.ssh/borg_ed25519 \
+    && cat /root/.ssh/borg_ed25519.pub > /root/.ssh/authorized_keys \
+    && chmod 700 /root/.ssh && chmod 600 /root/.ssh/authorized_keys \
+    && printf 'PermitRootLogin prohibit-password\nPasswordAuthentication no\n' >> /etc/ssh/sshd_config \
+    && ssh-keyscan -H localhost > /root/.ssh/known_hosts 2>/dev/null || true
+
+# A stub reporting borg 1.1, so the --prefix branch of prune (renamed to
+# --glob-archives in 1.2) is covered without installing a second borg.
+RUN printf '#!/bin/sh\necho "borg 1.1.18"\n' > /usr/local/bin/borg-1.1-stub \
+    && chmod 755 /usr/local/bin/borg-1.1-stub
 
 WORKDIR /plugin
 ENTRYPOINT ["/bin/bash"]
