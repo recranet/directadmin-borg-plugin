@@ -1,10 +1,12 @@
 # One service per environment the plugin has to work in.
 #
-# DirectAdmin servers are predominantly EL, so AlmaLinux 8 and 9 are the images
-# that matter most; the Debian ones cover the other half of the estate and pin
-# the borg version range. borg differs across them in pruning flags and in
-# having a compact command, which the plugin feature-detects rather than
-# assumes — these images are what check that it detects correctly.
+# All AlmaLinux, because that is what DirectAdmin servers run. The axes that
+# actually change behaviour are the PHP version and the borg version, so the
+# three images span both rather than repeating one combination on two distros.
+#
+# borg 1.1 prunes with --prefix and has no compact command; 1.2 renamed the flag
+# to --glob-archives and added compaction. The plugin feature-detects rather than
+# assuming, and these images are what check that it detects correctly.
 
 x-common: &common
   volumes:
@@ -16,7 +18,7 @@ x-common: &common
   command: ["test/run-tests.sh"]
 
 services:
-  # AlmaLinux 9 with EPEL borg: the most likely production shape.
+  # PHP 8.1, the oldest version supported, with EPEL 9's borg.
   alma9:
     <<: *common
     build:
@@ -25,9 +27,11 @@ services:
       args:
         EL_VERSION: "9"
         PHP_STREAM: "8.1"
+        BORG_SOURCE: epel
     image: directadmin-borg-plugin-test:alma9
 
-  # AlmaLinux 8, still widely deployed and carrying an older EPEL borg.
+  # AlmaLinux 8, still widely deployed, and the only place borg 1.1 is still
+  # shipped -- which is what covers the older pruning branch for real.
   alma8:
     <<: *common
     build:
@@ -35,26 +39,24 @@ services:
       dockerfile: Dockerfile.el
       args:
         EL_VERSION: "8"
-        PHP_STREAM: "8.1"
+        PHP_STREAM: "8.2"
+        BORG_SOURCE: epel
     image: directadmin-borg-plugin-test:alma8
 
-  # Debian stable's borg (1.2.x).
-  borg12:
+  # Opt-in, not in the default matrix: no EL repository carries borg 1.4, so
+  # installing it means pip and a build toolchain, which is not how anyone runs
+  # it in production. Kept for the day EPEL moves to 1.4, and worth running
+  # before upgrading a server past what EPEL ships.
+  #
+  #   test/docker-test.sh alma9-borg14
+  alma9-borg14:
     <<: *common
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.el
       args:
-        BORG_SOURCE: apt
-    image: directadmin-borg-plugin-test:borg12
-
-  # Current upstream stable (1.4.x), which no Debian release carries yet.
-  borg14:
-    <<: *common
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
+        EL_VERSION: "9"
+        PHP_STREAM: "8.2"
         BORG_SOURCE: pip
         BORG_VERSION: "1.4.5"
-    image: directadmin-borg-plugin-test:borg14
+    image: directadmin-borg-plugin-test:alma9-borg14

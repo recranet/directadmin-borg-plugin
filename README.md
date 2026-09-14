@@ -85,7 +85,7 @@ Admin Level → Plugin Manager → Add Plugin → upload `borg-<version>.tar.gz`
 Or from a shell:
 
 ```sh
-tar -xzf borg-1.3.1.tar.gz -C /usr/local/directadmin/plugins/
+tar -xzf borg-1.3.2.tar.gz -C /usr/local/directadmin/plugins/
 sh /usr/local/directadmin/plugins/borg/scripts/install.sh
 ```
 
@@ -96,7 +96,7 @@ directory.
 **From a source checkout**, build the tarball first:
 
 ```sh
-make package      # -> dist/borg-1.3.1.tar.gz
+make package      # -> dist/borg-1.3.2.tar.gz
 ```
 
 ---
@@ -390,34 +390,41 @@ working tree.
 ## Testing
 
 ```sh
-make test              # every environment
-test/docker-test.sh alma9     # just one
+make test                          # the environments that mirror production
+test/docker-test.sh alma9          # just one
+test/docker-test.sh alma9-borg14   # opt-in: borg newer than EPEL ships
 ```
 
-The suite runs against four environments, because the plugin has to work across
-what is actually deployed:
+All images are AlmaLinux, because that is what DirectAdmin servers run, and borg
+is installed the way a real server installs it:
+
+```sh
+dnf -y install epel-release
+dnf -y install borgbackup
+```
 
 | Environment | PHP | borg | Why |
 |---|---|---|---|
-| `alma9` | 8.1 | 1.2.9 | The most likely production shape |
-| `alma8` | 8.1 | **1.1.18** | Still widely deployed; EPEL 8 carries borg 1.1 |
-| `borg12` | 8.1 | 1.2.4 | Debian stable |
-| `borg14` | 8.1 | **1.4.5** | Current upstream stable |
+| `alma9` | 8.1 | 1.2.9 (EPEL 9) | The common production shape, on the oldest PHP supported |
+| `alma8` | 8.2 | **1.1.18** (EPEL 8) | Still widely deployed, and the only place borg 1.1 still ships |
+| `alma9-borg14` | 8.2 | 1.4.5 (pip) | **Opt-in.** Not in the default run |
 
-That spread is the point. borg 1.1 prunes with `--prefix` and has no `compact`
-command; 1.2 renamed the flag to `--glob-archives` and added compaction. The
-plugin feature-detects rather than assuming, and `alma8` is what proves the
-older branch works against a real borg 1.1 rather than a stub.
+The spread across those two axes is the point. borg 1.1 prunes with `--prefix`
+and has no `compact` command; 1.2 renamed the flag to `--glob-archives` and
+added compaction. The plugin feature-detects rather than assuming, and `alma8`
+is what proves the older branch works against a real borg 1.1 rather than a
+stub. PHP spans 8.1, the supported floor, to 8.2.
 
-PHP is pinned to **8.1** everywhere, matching the native CLI on the target
-servers, so 8.2+ syntax cannot slip through. On the EL images it comes from Remi,
-since AlmaLinux 8's AppStream has no 8.1 stream at all.
+`alma9-borg14` is excluded from the default run on purpose: no EL repository
+carries borg 1.4, so installing it means pip and a build toolchain, which is not
+how anyone runs it in production. It is there for the day EPEL moves to 1.4, and
+worth running before putting a server on a borg newer than EPEL ships.
 
-Each image carries a real borg and a `/home` with two customer accounts at
-DirectAdmin's `0711` permissions, plus DirectAdmin-style admin backups, an sshd
-for remote-repository tests, and a stub borg for version-branch tests. Each run
-installs the plugin with the production `install.sh` and then drives the real
-entry points the way DirectAdmin does — environment in, stdout out.
+Each image carries a `/home` with two customer accounts at DirectAdmin's `0711`
+permissions, DirectAdmin-style admin backups, an sshd for remote-repository
+tests, and a stub borg for version-branch tests. Each run installs the plugin
+with the production `install.sh`, then drives the real entry points the way
+DirectAdmin does — environment in, stdout out.
 
 No DirectAdmin server is involved, and nothing outside the container is touched.
 

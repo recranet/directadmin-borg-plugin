@@ -1,17 +1,24 @@
 # AlmaLinux test image for the DirectAdmin Borg plugin.
 #
 # This is the family the plugin actually runs on: DirectAdmin servers are
-# predominantly EL, and the differences from Debian are real — PHP arrives as an
-# AppStream module rather than a single package, extensions are separate RPMs
-# loaded through ini files (so `php -n` sees none of them), and borg comes from
-# EPEL, whose version trails upstream by a different amount per release.
-# Declared before FROM so it can select the base image, then re-declared after
-# it, since an ARG from the global scope is not visible inside a build stage.
+# predominantly EL, and the differences from Debian are the ones that bite —
+# extensions are separate RPMs loaded through ini files (so `php -n` sees none
+# of them), borg comes from EPEL and trails upstream by a different amount per
+# release, and the CLI memory limit is lower.
+#
+# PHP comes from AppStream. Where the binary came from does not change how it
+# behaves; the version and the compiled-in extensions do, and 8.2 is available
+# as a module stream on both EL8 and EL9.
+
 ARG EL_VERSION=9
 FROM almalinux:${EL_VERSION}
 
 ARG EL_VERSION
-ARG PHP_STREAM=8.1
+ARG PHP_STREAM=8.2
+# "epel" takes whatever EPEL ships for this release; "pip" builds a pinned
+# upstream version, which is the only way to reach borg 1.4 on EL.
+ARG BORG_SOURCE=epel
+ARG BORG_VERSION=1.4.5
 
 # EPEL carries borgbackup; CRB/PowerTools carries some of its dependencies.
 RUN set -eux; \
@@ -27,21 +34,30 @@ RUN set -eux; \
     dnf -y update
 
 # DirectAdmin plugin scripts run whatever /usr/local/bin/php points at, which on
-# a DirectAdmin server is the CustomBuild CLI build. PHP 8.1 is taken from Remi
-# rather than AppStream because EL8 has no 8.1 stream at all (7.2 through 8.0,
-# then 8.2), and pinning the version matters more here than the packaging route:
-# the point of this image is to catch 8.2+ syntax before it reaches a server.
+# a real server is the CustomBuild CLI build.
 RUN set -eux; \
-    dnf -y install "https://rpms.remirepo.net/enterprise/remi-release-${EL_VERSION}.rpm"; \
     dnf -y module reset php; \
-    dnf -y module enable "php:remi-${PHP_STREAM}"; \
+    dnf -y module enable "php:${PHP_STREAM}"; \
     dnf -y install php-cli php-mbstring; \
+    dnf clean all; \
     ln -sf "$(command -v php)" /usr/local/bin/php; \
     php -v; \
-    php -r 'exit(PHP_VERSION_ID >= 80100 && PHP_VERSION_ID < 80200 ? 0 : 1);'
+    test "$(php -r 'echo PHP_MAJOR_VERSION . "." . PHP_MINOR_VERSION;')" = "${PHP_STREAM}"
 
 RUN set -eux; \
-    dnf -y install borgbackup openssh-server openssh-clients util-linux procps-ng cronie shadow-utils tar; \
+    dnf -y install openssh-server openssh-clients util-linux procps-ng cronie shadow-utils; \
+    if [ "$BORG_SOURCE" = "epel" ]; then \
+        dnf -y install borgbackup; \
+    else \
+        # borg 1.4 needs Python 3.10 or newer; EL9's default python3 is 3.9,
+        # so build against the parallel-installable 3.11 from AppStream.
+        dnf -y install python3.11 python3.11-devel python3.11-pip gcc make pkgconfig \
+            openssl-devel libacl-devel lz4-devel libzstd-devel xxhash-devel; \
+        python3.11 -m venv /opt/borg; \
+        /opt/borg/bin/pip install --no-cache-dir --upgrade pip setuptools wheel; \
+        /opt/borg/bin/pip install --no-cache-dir "borgbackup==${BORG_VERSION}"; \
+        ln -sf /opt/borg/bin/borg /usr/local/bin/borg; \
+    fi; \
     dnf clean all; \
     borg --version
 
