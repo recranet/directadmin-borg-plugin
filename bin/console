@@ -21,7 +21,16 @@ use Symfony\Component\Console\Application;
 
 $plugin = Plugin::boot(dirname(__DIR__));
 
-$application = new Application('DirectAdmin Borg plugin', '1.0.0');
+// Read from plugin.conf rather than carrying a second copy that drifts.
+$version = '0.0.0';
+foreach (file(dirname(__DIR__) . '/plugin.conf', FILE_IGNORE_NEW_LINES) ?: [] as $line) {
+    if (str_starts_with($line, 'version=')) {
+        $version = trim(substr($line, 8));
+        break;
+    }
+}
+
+$application = new Application('DirectAdmin Borg plugin', $version);
 $application->addCommands([
     new RunJobCommand($plugin),
     new ScheduledBackupCommand($plugin),
