@@ -36,7 +36,7 @@ final class Paths
         public readonly string $cronFile,
         public readonly string $passwdFile,
         public readonly string $daUsersDir,
-        public readonly string $borgHome
+        public readonly string $borgHome,
     ) {
     }
 

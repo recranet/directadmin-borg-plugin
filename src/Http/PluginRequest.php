@@ -28,7 +28,7 @@ final class PluginRequest
     private function __construct(
         public readonly string $level,
         public readonly string $username,
-        public readonly Request $request
+        public readonly Request $request,
     ) {
     }
 
@@ -50,7 +50,12 @@ final class PluginRequest
         );
     }
 
-    /** Build a request directly, for tests. */
+    /**
+     * Build a request directly, for tests.
+     *
+     * @param array<string,mixed> $query
+     * @param array<string,mixed> $body
+     */
     public static function fromArrays(string $level, string $username, array $query, array $body, string $method = 'GET'): self
     {
         return new self($level, $username, new Request($query, $body, [], [], [], ['REQUEST_METHOD' => $method]));
@@ -81,6 +86,8 @@ final class PluginRequest
     /**
      * DirectAdmin HTML-entity encodes exported values, so &amp; has to become &
      * again before the string can be parsed as a query string.
+     *
+     * @return array<int|string,mixed>
      */
     private static function parse(string $raw): array
     {
@@ -89,7 +96,7 @@ final class PluginRequest
         }
 
         $parsed = [];
-        parse_str(html_entity_decode($raw, ENT_QUOTES | ENT_HTML5, 'UTF-8'), $parsed);
+        parse_str(html_entity_decode($raw, \ENT_QUOTES | \ENT_HTML5, 'UTF-8'), $parsed);
 
         return $parsed;
     }
@@ -154,6 +161,7 @@ final class PluginRequest
         };
     }
 
+    /** @param array<string,scalar> $params */
     public function url(array $params = []): string
     {
         $url = $this->baseUrl() . '/index.html';

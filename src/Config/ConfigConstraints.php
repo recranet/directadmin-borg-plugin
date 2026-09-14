@@ -100,11 +100,11 @@ final class ConfigConstraints
                     message: 'Compression must look like "lz4", "zstd,6" or "zlib,9".',
                 ),
             ],
-            'keep_daily'   => [new Assert\Range(min: 0, max: 9999, notInRangeMessage: 'Daily retention must be between 0 and 9999.')],
-            'keep_weekly'  => [new Assert\Range(min: 0, max: 9999, notInRangeMessage: 'Weekly retention must be between 0 and 9999.')],
-            'keep_monthly' => [new Assert\Range(min: 0, max: 9999, notInRangeMessage: 'Monthly retention must be between 0 and 9999.')],
-            'schedule_minute' => [new CronField(min: 0, max: 59, label: 'Schedule minute')],
-            'schedule_hour'   => [new CronField(min: 0, max: 23, label: 'Schedule hour')],
+            'keep_daily'        => [new Assert\Range(min: 0, max: 9999, notInRangeMessage: 'Daily retention must be between 0 and 9999.')],
+            'keep_weekly'       => [new Assert\Range(min: 0, max: 9999, notInRangeMessage: 'Weekly retention must be between 0 and 9999.')],
+            'keep_monthly'      => [new Assert\Range(min: 0, max: 9999, notInRangeMessage: 'Monthly retention must be between 0 and 9999.')],
+            'schedule_minute'   => [new CronField(min: 0, max: 59, label: 'Schedule minute')],
+            'schedule_hour'     => [new CronField(min: 0, max: 23, label: 'Schedule hour')],
             'admin_backups_dir' => [
                 new Assert\NotBlank(message: 'Admin backups directory must not be empty.'),
                 new Assert\Regex(

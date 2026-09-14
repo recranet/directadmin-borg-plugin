@@ -43,6 +43,17 @@ for file in "$PLUGIN_DIR"/bootstrap.php "$PLUGIN_DIR"/bin/console \
 done
 echo "    all plugin sources parse on PHP $(php -r 'echo PHP_VERSION;')"
 
+# Static analysis runs here as well as in `make check`, so the containerised
+# suite is a complete gate on its own. It analyses the source tree rather than
+# the staged install: the staging copy exists to exercise the installer, and
+# analysing it would load a second identical autoloader.
+if [ -f "$SRC_DIR/vendor/bin/phpstan" ]; then
+    echo "==> PHPStan"
+    (cd "$SRC_DIR" && php vendor/bin/phpstan analyse --no-progress)
+else
+    echo "==> PHPStan skipped (dev dependencies not installed)"
+fi
+
 echo "==> Checking every Twig template compiles"
 php "$PLUGIN_DIR/test/lint-templates.php"
 

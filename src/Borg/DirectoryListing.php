@@ -12,7 +12,7 @@ final class DirectoryListing
         public readonly array $entries,
         public readonly bool $truncated,
         public readonly bool $readable,
-        public readonly string $error = ''
+        public readonly string $error = '',
     ) {
     }
 

@@ -20,7 +20,7 @@ final class JobRepository
 {
     public function __construct(
         private readonly Paths $paths,
-        private readonly Filesystem $filesystem
+        private readonly Filesystem $filesystem,
     ) {
     }
 
@@ -65,7 +65,7 @@ final class JobRepository
         }
 
         try {
-            $data = json_decode((string) @file_get_contents($file), true, 512, JSON_THROW_ON_ERROR);
+            $data = json_decode((string) @file_get_contents($file), true, 512, \JSON_THROW_ON_ERROR);
         } catch (\JsonException) {
             return null;
         }
@@ -117,6 +117,7 @@ final class JobRepository
         return $jobs;
     }
 
+    /** @param array<string,mixed> $changes */
     public function update(Job $job, array $changes): void
     {
         $job->set($changes);
@@ -182,7 +183,7 @@ final class JobRepository
         foreach ($finder as $file) {
             $id = $file->getBasename('.json');
             $this->filesystem->remove([$file->getPathname(), $this->paths->logFile($id)]);
-            $removed++;
+            ++$removed;
         }
 
         return $removed;
@@ -208,7 +209,7 @@ final class JobRepository
     {
         $this->filesystem->dumpFile(
             $this->paths->jobFile($job->id),
-            json_encode($job->toArray(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n"
+            json_encode($job->toArray(), \JSON_PRETTY_PRINT | \JSON_UNESCAPED_SLASHES | \JSON_THROW_ON_ERROR) . "\n"
         );
         $this->filesystem->chmod($this->paths->jobFile($job->id), 0600);
     }

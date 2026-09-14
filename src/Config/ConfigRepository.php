@@ -20,7 +20,7 @@ final class ConfigRepository
     public function __construct(
         private readonly Paths $paths,
         private readonly Filesystem $filesystem,
-        private readonly ValidatorInterface $validator
+        private readonly ValidatorInterface $validator,
     ) {
     }
 
@@ -80,7 +80,7 @@ final class ConfigRepository
 
         $this->filesystem->dumpFile(
             $this->paths->configFile(),
-            json_encode($candidate, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n"
+            json_encode($candidate, \JSON_PRETTY_PRINT | \JSON_UNESCAPED_SLASHES | \JSON_THROW_ON_ERROR) . "\n"
         );
         $this->filesystem->chmod($this->paths->configFile(), 0600);
 
@@ -115,6 +115,11 @@ final class ConfigRepository
      * Form input arrives as strings, so booleans and integers have to be cast
      * before Assert\Type would ever pass, and the two list fields accept either
      * a textarea's newline-separated text or a real array.
+     */
+    /**
+     * @param array<string,mixed> $values
+     *
+     * @return array<string,mixed>
      */
     private function coerce(array $values): array
     {
@@ -183,6 +188,7 @@ final class ConfigRepository
         return \in_array(strtolower((string) $value), ['1', 'on', 'yes', 'true'], true);
     }
 
+    /** @return array<string,mixed> */
     private function readJson(string $file): array
     {
         if (!is_file($file)) {
@@ -194,7 +200,7 @@ final class ConfigRepository
         }
 
         try {
-            $decoded = json_decode($raw, true, 512, JSON_THROW_ON_ERROR);
+            $decoded = json_decode($raw, true, 512, \JSON_THROW_ON_ERROR);
         } catch (\JsonException) {
             // A corrupt config falls back to defaults rather than taking the
             // whole plugin down; the UI then shows an unconfigured plugin.

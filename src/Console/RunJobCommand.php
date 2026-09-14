@@ -39,7 +39,7 @@ final class RunJobCommand extends Command
 
         $job = $this->plugin->jobs()->find($id);
         if ($job === null) {
-            $output->writeln(sprintf('<error>Unknown job: %s</error>', $id));
+            $output->writeln(\sprintf('<error>Unknown job: %s</error>', $id));
 
             return Command::INVALID;
         }
@@ -47,7 +47,7 @@ final class RunJobCommand extends Command
         // Only a freshly queued job may start, so a re-run of the same id
         // cannot restart a backup that is already in flight or finished.
         if ($job->status() !== Job::STATUS_QUEUED) {
-            $output->writeln(sprintf('<comment>Job %s is %s, not queued.</comment>', $id, $job->status()));
+            $output->writeln(\sprintf('<comment>Job %s is %s, not queued.</comment>', $id, $job->status()));
 
             return Command::INVALID;
         }

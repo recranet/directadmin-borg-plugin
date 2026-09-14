@@ -29,7 +29,7 @@ final class BorgRunner
 
     public function __construct(
         private readonly string $binary,
-        private readonly string $home
+        private readonly string $home,
     ) {
     }
 
@@ -50,7 +50,11 @@ final class BorgRunner
         return $this->binary;
     }
 
-    /** Environment applied to every call, e.g. BORG_PASSPHRASE and BORG_RSH. */
+    /**
+     * Environment applied to every call, e.g. BORG_PASSPHRASE and BORG_RSH.
+     *
+     * @param array<string,string|null> $env
+     */
     public function withEnvironment(array $env): self
     {
         $clone = clone $this;
@@ -117,7 +121,7 @@ final class BorgRunner
         array $arguments,
         int $timeout = 120,
         ?callable $onOutput = null,
-        ?string $workingDirectory = null
+        ?string $workingDirectory = null,
     ): BorgResult {
         $process = new Process(
             array_merge([$this->binary], array_values(array_map('strval', $arguments))),
@@ -144,7 +148,7 @@ final class BorgRunner
             $timedOut ? 124 : (int) $process->getExitCode(),
             $process->getOutput(),
             $timedOut
-                ? trim($process->getErrorOutput() . sprintf("\nborg timed out after %ds.", $timeout))
+                ? trim($process->getErrorOutput() . \sprintf("\nborg timed out after %ds.", $timeout))
                 : $process->getErrorOutput(),
             $process->getCommandLine(),
             $timedOut

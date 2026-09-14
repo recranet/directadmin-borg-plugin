@@ -36,7 +36,7 @@ final class UserPage
     public function __construct(
         private readonly Plugin $plugin,
         private readonly PluginRequest $request,
-        private readonly CsrfTokenizer $csrf
+        private readonly CsrfTokenizer $csrf,
     ) {
         $this->flash = new FlashBag();
 
@@ -54,27 +54,28 @@ final class UserPage
         $renderer->setUrlGenerator(fn (array $params = []): string => $this->request->url($params));
 
         $base = [
-            'title'      => 'Backups',
-            'subtitle'   => 'Restore files from the server backup into your home directory.',
-            'messages'   => [],
-            'enabled'    => $config->userRestoreEnabled(),
-            'fatal'      => null,
-            'available'  => false,
-            'job'        => null,
-            'browser'    => null,
-            'archives'   => [],
+            'title'       => 'Backups',
+            'subtitle'    => 'Restore files from the server backup into your home directory.',
+            'messages'    => [],
+            'enabled'     => $config->userRestoreEnabled(),
+            'fatal'       => null,
+            'available'   => false,
+            'job'         => null,
+            'browser'     => null,
+            'archives'    => [],
             'recent_jobs' => [],
-            'csrf_token' => '',
-            'error'      => null,
-            'home'       => '',
+            'csrf_token'  => '',
+            'error'       => null,
+            'home'        => '',
         ];
 
         if (!$config->userRestoreEnabled()) {
             return $renderer->render('user/page.html.twig', $base);
         }
 
-        if ($this->account === null) {
-            return $renderer->render('user/page.html.twig', $base + [] + ['fatal' => $this->accountError]);
+        $account = $this->account;
+        if ($account === null) {
+            return $renderer->render('user/page.html.twig', array_merge($base, ['fatal' => $this->accountError]));
         }
 
         $available = $config->isConfigured() && $this->plugin->repository()->runner()->isInstalled();
@@ -90,17 +91,17 @@ final class UserPage
             'available'   => true,
             'messages'    => $this->flash->all(),
             'csrf_token'  => $this->csrf->token($this->request->level, $this->request->username),
-            'home'        => $this->account->home,
-            'recent_jobs' => array_map([$this, 'jobToArray'], $this->plugin->jobs()->recent(10, $this->account->username)),
+            'home'        => $account->home,
+            'recent_jobs' => array_map([$this, 'jobToArray'], $this->plugin->jobs()->recent(10, $account->username)),
         ]);
 
         $jobId = $this->request->param('job');
         $archive = $this->request->param('archive');
 
         if ($jobId !== '') {
-            $context = array_merge($context, $this->jobContext($jobId));
+            $context = array_merge($context, $this->jobContext($jobId, $account));
         } elseif ($archive !== '') {
-            $context = array_merge($context, ['browser' => $this->browserContext($archive)]);
+            $context = array_merge($context, ['browser' => $this->browserContext($archive, $account)]);
         } else {
             $context = array_merge($context, $this->archiveListContext());
         }
@@ -155,7 +156,7 @@ final class UserPage
             throw new BorgPluginException('Select at least one file or folder to restore.');
         }
         if (\count($paths) > self::MAX_RESTORE_ITEMS) {
-            throw new BorgPluginException(sprintf('Select at most %d items at a time.', self::MAX_RESTORE_ITEMS));
+            throw new BorgPluginException(\sprintf('Select at most %d items at a time.', self::MAX_RESTORE_ITEMS));
         }
 
         // The boundary that keeps a user inside their own data.
@@ -173,7 +174,7 @@ final class UserPage
         ]);
         $this->plugin->dispatcher()->dispatch($job);
 
-        $this->flash->success(sprintf(
+        $this->flash->success(\sprintf(
             'Restoring %d item(s) into %s. Your original files are not touched.',
             \count($confined),
             $destination
@@ -182,6 +183,7 @@ final class UserPage
 
     // -------------------------------------------------------------- context
 
+    /** @return array<string,mixed> */
     private function archiveListContext(): array
     {
         $listing = $this->plugin->repository()->listArchives();
@@ -201,15 +203,14 @@ final class UserPage
         ];
     }
 
-    private function browserContext(string $archive): array
+    /** @return array<string,mixed> */
+    private function browserContext(string $archive, Account $account): array
     {
-        $account = $this->account;
-
         if (!isset($this->archiveIndex()[$archive])) {
             $this->flash->error('Unknown archive.');
 
             return ['archive' => $archive, 'missing' => true, 'entries' => [], 'crumbs' => [], 'truncated' => false,
-                'taken_at' => '', 'restore_dir' => ''];
+                'taken_at'    => '', 'restore_dir' => ''];
         }
 
         $requested = $this->request->param('path', $account->home);
@@ -232,17 +233,18 @@ final class UserPage
             'missing'     => !$listing->readable && $listing->isEmpty(),
             'entries'     => array_map([$this, 'entryToArray'], $listing->entries),
             'truncated'   => $listing->truncated,
-            'crumbs'      => $this->crumbs($archive, $path),
+            'crumbs'      => $this->crumbs($archive, $path, $account),
             'restore_dir' => $account->restoreRoot($config->userRestoreDir()),
         ];
     }
 
-    private function jobContext(string $jobId): array
+    /** @return array<string,mixed> */
+    private function jobContext(string $jobId, Account $account): array
     {
         $job = $this->plugin->jobs()->find($jobId);
 
         // A user may only ever see their own restores.
-        if ($job === null || $job->owner() !== $this->account->username) {
+        if ($job === null || $job->owner() !== $account->username) {
             $this->flash->error('No such restore.');
 
             return ['job' => null];
@@ -256,9 +258,9 @@ final class UserPage
     }
 
     /** @return array<int,array{label:string,url:string}> */
-    private function crumbs(string $archive, string $path): array
+    private function crumbs(string $archive, string $path, Account $account): array
     {
-        $home = $this->account->home;
+        $home = $account->home;
 
         $crumbs = [[
             'label' => basename($home),
@@ -294,6 +296,7 @@ final class UserPage
         return $this->archiveIndex;
     }
 
+    /** @return array<string,mixed> */
     private function entryToArray(ArchiveEntry $entry): array
     {
         return [
@@ -305,6 +308,7 @@ final class UserPage
         ];
     }
 
+    /** @return array<string,mixed> */
     private function jobToArray(Job $job): array
     {
         return [

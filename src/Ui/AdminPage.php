@@ -45,7 +45,7 @@ final class AdminPage
     public function __construct(
         private readonly Plugin $plugin,
         private readonly PluginRequest $request,
-        private readonly CsrfTokenizer $csrf
+        private readonly CsrfTokenizer $csrf,
     ) {
         $this->flash = new FlashBag();
     }
@@ -114,18 +114,18 @@ final class AdminPage
 
         try {
             match ($this->request->action()) {
-                'save_repository' => $this->saveRepository(),
-                'init_repository' => $this->initRepository(),
-                'save_backup'     => $this->saveBackup(),
-                'run_backup'      => $this->startJob(Job::TYPE_BACKUP),
-                'run_prune'       => $this->startJob(Job::TYPE_PRUNE),
-                'run_check'       => $this->startJob(Job::TYPE_CHECK),
-                'break_lock'      => $this->breakLock(),
-                'delete_archive'  => $this->deleteArchive(),
-                'restore'         => $this->restore(),
-                'restore_user'    => $this->restoreUser(),
+                'save_repository'      => $this->saveRepository(),
+                'init_repository'      => $this->initRepository(),
+                'save_backup'          => $this->saveBackup(),
+                'run_backup'           => $this->startJob(Job::TYPE_BACKUP),
+                'run_prune'            => $this->startJob(Job::TYPE_PRUNE),
+                'run_check'            => $this->startJob(Job::TYPE_CHECK),
+                'break_lock'           => $this->breakLock(),
+                'delete_archive'       => $this->deleteArchive(),
+                'restore'              => $this->restore(),
+                'restore_user'         => $this->restoreUser(),
                 'restore_admin_backup' => $this->restoreAdminBackupOnly(),
-                default           => $this->flash->error('Unknown action.'),
+                default                => $this->flash->error('Unknown action.'),
             };
         } catch (\Throwable $e) {
             $this->flash->error($e->getMessage());
@@ -248,7 +248,7 @@ final class AdminPage
         $job = $this->plugin->jobs()->create($type, $this->request->username, $params);
         $this->plugin->dispatcher()->dispatch($job);
 
-        $this->flash->success(sprintf('%s started. Follow it under Jobs.', ucfirst($type)));
+        $this->flash->success(\sprintf('%s started. Follow it under Jobs.', ucfirst($type)));
     }
 
     private function breakLock(): void
@@ -289,7 +289,7 @@ final class AdminPage
         $result = $this->plugin->repository()->deleteArchive($archive);
 
         if ($result->isSuccessful()) {
-            $this->flash->success(sprintf('Archive "%s" deleted.', $archive));
+            $this->flash->success(\sprintf('Archive "%s" deleted.', $archive));
         } else {
             $this->flash->error('Could not delete the archive: ' . $result->errorMessage());
         }
@@ -318,7 +318,7 @@ final class AdminPage
         $destination = $this->restoreDestination();
         $this->queueRestore($archive, $paths, $destination);
 
-        $this->flash->success(sprintf(
+        $this->flash->success(\sprintf(
             'Restoring %d item(s) into %s. Follow it under Jobs.',
             \count($paths),
             $destination
@@ -359,7 +359,7 @@ final class AdminPage
             // Deliberately not a fallback to /home/<username>: see the note
             // above. Tell the operator what to do and let them decide.
             $this->missingAccount = $username;
-            $this->flash->error(sprintf(
+            $this->flash->error(\sprintf(
                 '%s Create the user in DirectAdmin first, then restore their files. '
                 . 'If the account is gone entirely, restore its DirectAdmin backup below and '
                 . 'use Admin Level -> Restore Backups to recreate the account, then come back here.',
@@ -376,7 +376,7 @@ final class AdminPage
             : null;
 
         if ($config->restoreAdminBackup() && $adminBackup === null) {
-            $this->flash->warning(sprintf(
+            $this->flash->warning(\sprintf(
                 'No DirectAdmin backup for "%s" was found in %s in this archive, so only the home directory '
                 . 'is being restored. Databases and account configuration live in that backup, not in the home directory.',
                 $username,
@@ -425,7 +425,7 @@ final class AdminPage
             : 'home directory only';
 
         $this->flash->success($inPlace
-            ? sprintf(
+            ? \sprintf(
                 'Restoring %s (%s) to its original location.%s Follow it under Jobs.',
                 $username,
                 $contents,
@@ -433,7 +433,7 @@ final class AdminPage
                     ? ' ' . implode(' and ', $cleanPaths) . ' will be deleted first, so nothing outside the archive survives.'
                     : ' Existing files are overwritten; files added since the backup are left alone.'
             )
-            : sprintf('Restoring %s (%s) into %s. Follow it under Jobs.', $username, $contents, $destination));
+            : \sprintf('Restoring %s (%s) into %s. Follow it under Jobs.', $username, $contents, $destination));
     }
 
     /**
@@ -464,7 +464,7 @@ final class AdminPage
         $adminBackup = $this->plugin->repository()->findAdminBackup($archive, $config->adminBackupsDir(), $username);
 
         if ($adminBackup === null) {
-            $this->flash->error(sprintf(
+            $this->flash->error(\sprintf(
                 'No DirectAdmin backup for "%s" was found in %s in this archive. Looked for %s.',
                 $username,
                 $config->adminBackupsDir(),
@@ -487,13 +487,13 @@ final class AdminPage
         $this->queueRestore($archive, [$adminBackup->path], $destination, $username, $scopedRoots);
 
         $this->flash->success($toDirectAdmin
-            ? sprintf(
+            ? \sprintf(
                 'Restoring %s to %s, where DirectAdmin looks for it. Once it finishes, use '
                 . 'Admin Level -> Restore Backups to recreate the account, then return here to restore the home directory.',
                 basename($adminBackup->path),
                 $config->adminBackupsDir()
             )
-            : sprintf(
+            : \sprintf(
                 'Restoring %s into %s. Copy it to %s and chown it to admin before using '
                 . 'Admin Level -> Restore Backups, then return here to restore the home directory.',
                 basename($adminBackup->path),
@@ -519,9 +519,7 @@ final class AdminPage
         $normalized = PathGuard::confine($path, $home);
 
         if ($normalized === rtrim($home, '/')) {
-            throw new BorgPluginException(
-                'Refusing to delete the whole home directory. Name a subdirectory such as "domains".'
-            );
+            throw new BorgPluginException('Refusing to delete the whole home directory. Name a subdirectory such as "domains".');
         }
 
         return $normalized;
@@ -547,6 +545,7 @@ final class AdminPage
      *
      * @param string[]      $paths
      * @param string[]|null $scopedRoots non-null means restore in place
+     * @param string[]      $cleanPaths  directories to delete before extracting
      */
     private function queueRestore(
         string $archive,
@@ -555,7 +554,7 @@ final class AdminPage
         ?string $username = null,
         ?array $scopedRoots = null,
         array $cleanPaths = [],
-        ?string $cleanRoot = null
+        ?string $cleanRoot = null,
     ): Job {
         $paths = array_map([PathGuard::class, 'normalize'], $paths);
 
@@ -569,11 +568,7 @@ final class AdminPage
                     }
                 }
                 if (!$within) {
-                    throw new BorgPluginException(sprintf(
-                        'Refusing to restore %s in place: it is outside %s.',
-                        $path,
-                        implode(' and ', $scopedRoots)
-                    ));
+                    throw new BorgPluginException(\sprintf('Refusing to restore %s in place: it is outside %s.', $path, implode(' and ', $scopedRoots)));
                 }
             }
 
@@ -581,10 +576,7 @@ final class AdminPage
             // directory, so "/" is what puts a file back where it came from.
             $destination = '/';
         } elseif (\in_array($destination, self::PROTECTED_DESTINATIONS, true)) {
-            throw new BorgPluginException(sprintf(
-                'Refusing to restore directly into %s. Restore into a staging directory and move files from there.',
-                $destination
-            ));
+            throw new BorgPluginException(\sprintf('Refusing to restore directly into %s. Restore into a staging directory and move files from there.', $destination));
         }
 
         $job = $this->plugin->jobs()->create(Job::TYPE_RESTORE, $this->request->username, array_filter([
@@ -621,6 +613,7 @@ final class AdminPage
 
     // -------------------------------------------------------------- context
 
+    /** @return array<string,mixed> */
     private function overviewContext(Configuration $config): array
     {
         $status = [
@@ -636,7 +629,7 @@ final class AdminPage
 
         foreach ($this->plugin->jobs()->recent(40, null, Job::TYPE_BACKUP) as $job) {
             if ($job->isFinished()) {
-                $status['last_backup'] = sprintf('%s (%s)', Format::age((string) $job->get('finished_at')), $job->status());
+                $status['last_backup'] = \sprintf('%s (%s)', Format::age((string) $job->get('finished_at')), $job->status());
                 break;
             }
         }
@@ -659,6 +652,7 @@ final class AdminPage
         return ['status' => $status];
     }
 
+    /** @return array<string,mixed> */
     private function repositoryContext(Configuration $config): array
     {
         return [
@@ -668,6 +662,7 @@ final class AdminPage
         ];
     }
 
+    /** @return array<string,mixed> */
     private function backupContext(Configuration $config): array
     {
         return [
@@ -679,6 +674,7 @@ final class AdminPage
         ];
     }
 
+    /** @return array<string,mixed> */
     private function archivesContext(Configuration $config): array
     {
         if (!$config->isConfigured()) {
@@ -708,6 +704,7 @@ final class AdminPage
         ];
     }
 
+    /** @return array<string,mixed> */
     private function browserContext(string $archive): array
     {
         $path = $this->request->param('path', '/');
@@ -738,19 +735,21 @@ final class AdminPage
      * DirectAdmin does not have, which is what turns the admin-backup-only
      * button on.
      */
+    /** @return array<string,mixed> */
     private function userRestoreContext(string $archive, Configuration $config): array
     {
         return [
-            'archive'            => $archive,
-            'admin_backups_dir'  => $config->adminBackupsDir(),
-            'enabled'            => $config->restoreAdminBackup(),
-            'covered'            => $config->covers($config->adminBackupsDir()),
-            'missing_account'    => $this->missingAccount,
-            'username'           => trim($this->request->body()->getString('username')),
+            'archive'             => $archive,
+            'admin_backups_dir'   => $config->adminBackupsDir(),
+            'enabled'             => $config->restoreAdminBackup(),
+            'covered'             => $config->covers($config->adminBackupsDir()),
+            'missing_account'     => $this->missingAccount,
+            'username'            => trim($this->request->body()->getString('username')),
             'default_destination' => '/home/admin/borg_restore',
         ];
     }
 
+    /** @return array<string,mixed> */
     private function jobsContext(): array
     {
         $jobId = $this->request->param('job');
@@ -779,6 +778,7 @@ final class AdminPage
     }
 
     /** @return array<int,array{label:string,url:string}> */
+    /** @return array<int,array{label:string,url:string}> */
     private function crumbs(string $archive, string $path): array
     {
         $crumbs = [['label' => '/', 'url' => $this->request->url(['tab' => 'archives', 'archive' => $archive, 'path' => '/'])]];
@@ -795,6 +795,7 @@ final class AdminPage
         return $crumbs;
     }
 
+    /** @return array<string,mixed> */
     private function entryToArray(ArchiveEntry $entry): array
     {
         return [
@@ -808,6 +809,7 @@ final class AdminPage
         ];
     }
 
+    /** @return array<string,mixed> */
     private function jobToArray(Job $job): array
     {
         return [

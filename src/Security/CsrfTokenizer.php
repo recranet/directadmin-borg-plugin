@@ -26,7 +26,7 @@ final class CsrfTokenizer
 
     public function __construct(
         private readonly Paths $paths,
-        private readonly Filesystem $filesystem
+        private readonly Filesystem $filesystem,
     ) {
     }
 

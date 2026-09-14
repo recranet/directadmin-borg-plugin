@@ -13,13 +13,13 @@ namespace Recranet\DirectAdminBorg\Config;
 final class Configuration
 {
     public const DEFAULTS = [
-        'repository'           => '',
-        'encryption'           => 'repokey-blake2',
-        'ssh_command'          => '',
-        'archive_prefix'       => '{hostname}-',
-        'archive_name'         => '{hostname}-{now:%Y-%m-%d_%H:%M:%S}',
-        'source_paths'         => ['/home', '/etc', '/usr/local/directadmin/conf', '/usr/local/directadmin/data/users'],
-        'exclude_patterns'     => [
+        'repository'       => '',
+        'encryption'       => 'repokey-blake2',
+        'ssh_command'      => '',
+        'archive_prefix'   => '{hostname}-',
+        'archive_name'     => '{hostname}-{now:%Y-%m-%d_%H:%M:%S}',
+        'source_paths'     => ['/home', '/etc', '/usr/local/directadmin/conf', '/usr/local/directadmin/data/users'],
+        'exclude_patterns' => [
             'sh:/home/*/domains/*/public_html/**/cache/**',
             'sh:/home/*/.cache/**',
             'sh:/home/tmp/**',
@@ -60,7 +60,7 @@ final class Configuration
      */
     public function __construct(
         private readonly array $values,
-        private readonly string $passphrase
+        private readonly string $passphrase,
     ) {
     }
 
@@ -75,6 +75,7 @@ final class Configuration
         return $this->values[$key] ?? null;
     }
 
+    /** @param array<string,mixed> $values */
     public function withValues(array $values): self
     {
         return new self(array_merge($this->values, $values), $this->passphrase);
@@ -248,9 +249,9 @@ final class Configuration
         $hour = $this->scheduleHour();
 
         if (ctype_digit($minute) && ctype_digit($hour)) {
-            return sprintf('Daily at %02d:%02d server time', (int) $hour, (int) $minute);
+            return \sprintf('Daily at %02d:%02d server time', (int) $hour, (int) $minute);
         }
 
-        return sprintf('cron: %s %s * * *', $minute, $hour);
+        return \sprintf('cron: %s %s * * *', $minute, $hour);
     }
 }

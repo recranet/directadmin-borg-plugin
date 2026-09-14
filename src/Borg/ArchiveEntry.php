@@ -14,7 +14,7 @@ final class ArchiveEntry
         public readonly int $size,
         public readonly string $mode,
         public readonly string $owner,
-        public readonly string $modified
+        public readonly string $modified,
     ) {
     }
 

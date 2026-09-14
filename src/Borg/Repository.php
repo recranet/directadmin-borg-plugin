@@ -132,7 +132,7 @@ final class Repository
                 : substr($entryPath, \strlen($prefix) + 1);
 
             // '' is the directory itself; anything with a slash is deeper.
-            if ($relative === '' || $relative === false || str_contains($relative, '/')) {
+            if ($relative === '' || str_contains($relative, '/')) {
                 continue;
             }
 
@@ -144,7 +144,7 @@ final class Repository
             }
         }
 
-        ksort($children, SORT_NATURAL | SORT_FLAG_CASE);
+        ksort($children, \SORT_NATURAL | \SORT_FLAG_CASE);
 
         // Directories first, then files, each already sorted by name.
         $directories = [];
@@ -198,6 +198,7 @@ final class Repository
     }
 
     /** Arguments for a backup run. */
+    /** @return string[] */
     public function createArguments(): array
     {
         $arguments = ['create', '--stats', '--json', '--compression', $this->config->compression()];
@@ -219,7 +220,11 @@ final class Repository
         return $arguments;
     }
 
-    /** Arguments for pruning, or null when pruning is switched off. */
+    /**
+     * Arguments for pruning, or null when pruning is switched off.
+     *
+     * @return string[]|null
+     */
     public function pruneArguments(): ?array
     {
         if (!$this->config->pruneEnabled()) {
@@ -238,7 +243,7 @@ final class Repository
 
         foreach (['daily' => $this->config->keepDaily(), 'weekly' => $this->config->keepWeekly(), 'monthly' => $this->config->keepMonthly()] as $unit => $count) {
             if ($count > 0) {
-                $arguments[] = sprintf('--keep-%s=%d', $unit, $count);
+                $arguments[] = \sprintf('--keep-%s=%d', $unit, $count);
             }
         }
 
@@ -247,6 +252,7 @@ final class Repository
         return $arguments;
     }
 
+    /** @return string[] */
     public function compactArguments(): array
     {
         return ['compact', $this->location()];
@@ -259,6 +265,8 @@ final class Repository
      * directory, so the caller must run this with the destination as cwd.
      *
      * @param string[] $paths absolute paths as stored in the archive
+     *
+     * @return string[]
      */
     public function extractArguments(string $archive, array $paths): array
     {
@@ -270,6 +278,7 @@ final class Repository
         return $arguments;
     }
 
+    /** @return string[] */
     public function checkArguments(): array
     {
         return ['check', '--repository-only', $this->location()];

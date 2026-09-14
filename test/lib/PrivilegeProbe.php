@@ -22,7 +22,7 @@ final class PrivilegeProbe
 {
     public function __construct(
         private readonly Harness $harness,
-        private readonly Paths $paths
+        private readonly Paths $paths,
     ) {
     }
 
@@ -93,7 +93,7 @@ final class PrivilegeProbe
 
         $this->harness->ok(
             \count($adminPaths) < \count($rootPaths),
-            sprintf('admin archive is incomplete: %d entries vs %d as root', \count($adminPaths), \count($rootPaths))
+            \sprintf('admin archive is incomplete: %d entries vs %d as root', \count($adminPaths), \count($rootPaths))
         );
 
         // The dangerous part: borg treats unreadable files as a warning, so the

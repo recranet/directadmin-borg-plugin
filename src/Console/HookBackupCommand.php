@@ -46,7 +46,7 @@ final class HookBackupCommand extends Command
             ]);
 
             $this->plugin->dispatcher()->dispatch($job);
-            $output->writeln(sprintf('Started job %s', $job->id));
+            $output->writeln(\sprintf('Started job %s', $job->id));
         } catch (\Throwable $e) {
             $output->writeln('<comment>Borg hook skipped: ' . $e->getMessage() . '</comment>');
         }

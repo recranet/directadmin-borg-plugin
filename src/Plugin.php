@@ -29,11 +29,21 @@ final class Plugin
 {
     public const NAME = 'borg';
 
-    private array $services = [];
+    // Typed properties rather than a service map: a map keyed by class-string
+    // hands back `object` and loses every return type in this file.
+    private ?Filesystem $filesystem = null;
+    private ?ValidatorInterface $validator = null;
+    private ?ConfigRepository $config = null;
+    private ?BorgRunner $borg = null;
+    private ?JobRepository $jobs = null;
+    private ?JobDispatcher $dispatcher = null;
+    private ?CronWriter $cron = null;
+    private ?LockFactory $lockFactory = null;
+    private ?TemplateRenderer $renderer = null;
 
     private function __construct(
         public readonly string $pluginDir,
-        public readonly Paths $paths
+        public readonly Paths $paths,
     ) {
     }
 
@@ -49,17 +59,17 @@ final class Plugin
 
     public function filesystem(): Filesystem
     {
-        return $this->services[Filesystem::class] ??= new Filesystem();
+        return $this->filesystem ??= new Filesystem();
     }
 
     public function validator(): ValidatorInterface
     {
-        return $this->services[ValidatorInterface::class] ??= Validation::createValidator();
+        return $this->validator ??= Validation::createValidator();
     }
 
     public function config(): ConfigRepository
     {
-        return $this->services[ConfigRepository::class] ??= new ConfigRepository(
+        return $this->config ??= new ConfigRepository(
             $this->paths,
             $this->filesystem(),
             $this->validator()
@@ -68,7 +78,7 @@ final class Plugin
 
     public function borg(): BorgRunner
     {
-        return $this->services[BorgRunner::class] ??= new BorgRunner(
+        return $this->borg ??= new BorgRunner(
             BorgRunner::locateBinary(),
             $this->paths->borgHome
         );
@@ -87,17 +97,17 @@ final class Plugin
 
     public function jobs(): JobRepository
     {
-        return $this->services[JobRepository::class] ??= new JobRepository($this->paths, $this->filesystem());
+        return $this->jobs ??= new JobRepository($this->paths, $this->filesystem());
     }
 
     public function dispatcher(): JobDispatcher
     {
-        return $this->services[JobDispatcher::class] ??= new JobDispatcher($this->pluginDir, $this->paths);
+        return $this->dispatcher ??= new JobDispatcher($this->pluginDir);
     }
 
     public function cron(): CronWriter
     {
-        return $this->services[CronWriter::class] ??= new CronWriter(
+        return $this->cron ??= new CronWriter(
             $this->pluginDir,
             $this->paths,
             $this->filesystem()
@@ -114,12 +124,12 @@ final class Plugin
      */
     public function lockFactory(): LockFactory
     {
-        return $this->services[LockFactory::class] ??= new LockFactory(new FlockStore($this->paths->locksDir()));
+        return $this->lockFactory ??= new LockFactory(new FlockStore($this->paths->locksDir()));
     }
 
     public function renderer(): TemplateRenderer
     {
-        return $this->services[TemplateRenderer::class] ??= new TemplateRenderer(
+        return $this->renderer ??= new TemplateRenderer(
             $this->pluginDir . '/templates',
             $this->paths->cacheDir()
         );

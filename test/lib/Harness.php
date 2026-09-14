@@ -30,7 +30,7 @@ final class Harness
     public function __construct(
         private readonly string $pluginDir,
         private readonly string $dataDir = '/tmp/borg-plugin-test-data',
-        private readonly string $cronFile = '/tmp/borg-plugin-test-cron'
+        private readonly string $cronFile = '/tmp/borg-plugin-test-cron',
     ) {
         $this->filesystem = new Filesystem();
     }
@@ -89,15 +89,17 @@ final class Harness
         $this->record(
             $actual === $expected,
             $message,
-            sprintf('expected %s, got %s', var_export($expected, true), var_export($actual, true))
+            \sprintf('expected %s, got %s', var_export($expected, true), var_export($actual, true))
         );
     }
 
+    /** @param array<int|string,mixed> $value */
     public function isEmpty(array $value, string $message): void
     {
         $this->record($value === [], $message, 'got: ' . implode('; ', array_map('strval', $value)));
     }
 
+    /** @param array<int|string,mixed> $value */
     public function notEmpty(array $value, string $message): void
     {
         $this->record($value !== [], $message, 'expected at least one validation error');
@@ -126,13 +128,13 @@ final class Harness
     private function record(bool $passed, string $message, string $detail = ''): void
     {
         if ($passed) {
-            $this->passed++;
+            ++$this->passed;
             echo "  \033[32mPASS\033[0m " . $message . "\n";
 
             return;
         }
 
-        $this->failed++;
+        ++$this->failed;
         $this->failures[] = $message . ($detail !== '' ? ' (' . $detail . ')' : '');
         echo "  \033[31mFAIL\033[0m " . $message . ($detail !== '' ? "\n       " . $detail : '') . "\n";
     }
@@ -158,13 +160,18 @@ final class Harness
 
     // --------------------------------------------------------------- driving
 
-    /** A request object, as DirectAdmin would present it. */
+    /**
+     * A request object, as DirectAdmin would present it.
+     *
+     * @param array<string,mixed> $query
+     * @param array<string,mixed> $body
+     */
     public function request(
         string $level,
         string $username = 'admin',
         array $query = [],
         array $body = [],
-        string $method = 'GET'
+        string $method = 'GET',
     ): PluginRequest {
         return PluginRequest::fromArrays($level, $username, $query, $body, $method);
     }
@@ -174,6 +181,9 @@ final class Harness
      * does: environment in, stdout out. This is what makes the suite cover the
      * env-decoding path and the real shebang rather than just the classes.
      *
+     * @param array<string,mixed> $query
+     * @param array<string,mixed> $body
+     *
      * @return array{stdout:string,stderr:string,exit:int}
      */
     public function invoke(
@@ -182,7 +192,7 @@ final class Harness
         string $username = 'admin',
         array $query = [],
         array $body = [],
-        string $method = 'GET'
+        string $method = 'GET',
     ): array {
         return $this->exec(
             [$this->pluginDir . '/' . $level . '/' . $script],
@@ -191,33 +201,49 @@ final class Harness
                 'REQUEST_METHOD' => $method,
                 // DirectAdmin HTML-entity encodes the values it exports, so the
                 // harness must too or the decoding path would go untested.
-                'QUERY_STRING'   => $this->encode($query),
-                'POST'           => $this->encode($body),
-                'REMOTE_ADDR'    => '127.0.0.1',
+                'QUERY_STRING' => $this->encode($query),
+                'POST'         => $this->encode($body),
+                'REMOTE_ADDR'  => '127.0.0.1',
             ]
         );
     }
 
+    /**
+     * @param array<string,mixed> $query
+     * @param array<string,mixed> $body
+     */
     public function page(string $level, string $username = 'admin', array $query = [], array $body = [], string $method = 'GET'): string
     {
         return $this->invoke($level, 'index.html', $username, $query, $body, $method)['stdout'];
     }
 
-    /** Run a console command in the foreground. */
+    /**
+     * Run a console command in the foreground.
+     *
+     * @param string[] $arguments
+     *
+     * @return array{stdout:string,stderr:string,exit:int}
+     */
     public function console(array $arguments): array
     {
         return $this->exec(
-            array_merge([PHP_BINARY, '-n', $this->pluginDir . '/bin/console'], $arguments),
+            array_merge([\PHP_BINARY, '-n', $this->pluginDir . '/bin/console'], $arguments),
             $this->environment() + ['PATH' => getenv('PATH') ?: '/usr/bin:/bin']
         );
     }
 
+    /** @param array<string,mixed> $params */
     private function encode(array $params): string
     {
-        return $params === [] ? '' : htmlspecialchars(http_build_query($params), ENT_QUOTES, 'UTF-8');
+        return $params === [] ? '' : htmlspecialchars(http_build_query($params), \ENT_QUOTES, 'UTF-8');
     }
 
-    /** @return array{stdout:string,stderr:string,exit:int} */
+    /**
+     * @param string[]             $command
+     * @param array<string,string> $environment
+     *
+     * @return array{stdout:string,stderr:string,exit:int}
+     */
     public function exec(array $command, array $environment = [], ?string $cwd = null): array
     {
         $process = new Process($command, $cwd ?? $this->pluginDir, $environment + ['PATH' => getenv('PATH') ?: '/usr/bin:/bin'], null, 900.0);

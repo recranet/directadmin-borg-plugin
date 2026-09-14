@@ -22,7 +22,7 @@ final class CronField extends Constraint
         public int $max = 59,
         public string $label = 'Value',
         ?array $groups = null,
-        mixed $payload = null
+        mixed $payload = null,
     ) {
         parent::__construct([], $groups, $payload);
     }

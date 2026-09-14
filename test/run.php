@@ -1,4 +1,5 @@
 <?php
+
 /**
  * Test suite for the DirectAdmin Borg plugin.
  *
@@ -26,7 +27,7 @@ use Recranet\DirectAdminBorg\Support\Format;
 use Recranet\DirectAdminBorg\Test\Harness;
 use Recranet\DirectAdminBorg\Test\PrivilegeProbe;
 
-$pluginDir = \dirname(__DIR__);
+$pluginDir = dirname(__DIR__);
 $t = new Harness($pluginDir);
 $plugin = $t->reset();
 
@@ -116,7 +117,7 @@ $t->group('Configuration hygiene');
 
 $config->save(['source_paths' => "/home\n/home\n  /etc  \n\n"]);
 $t->is($config->load()->sourcePaths(), ['/home', '/etc'], 'source paths are trimmed and de-duplicated');
-$t->ok(\count(Configuration::DEFAULTS) > 0, 'defaults are defined');
+$t->ok(count(Configuration::DEFAULTS) > 0, 'defaults are defined');
 $t->is($config->load()->get('nonexistent_key'), null, 'unknown keys are not readable');
 
 // ======================================================================= CSRF
@@ -126,7 +127,7 @@ $t->group('CSRF tokens');
 $csrf = new CsrfTokenizer($plugin->paths, $plugin->filesystem());
 $token = $csrf->token(PluginRequest::LEVEL_ADMIN, 'admin');
 
-$t->is(\strlen($token), 64, 'token is a sha256 hex digest');
+$t->is(strlen($token), 64, 'token is a sha256 hex digest');
 $t->ok($csrf->isValid(PluginRequest::LEVEL_ADMIN, 'admin', $token), 'accepts its own token');
 $t->notOk($csrf->isValid(PluginRequest::LEVEL_ADMIN, 'admin', 'forged'), 'rejects a forged token');
 $t->notOk($csrf->isValid(PluginRequest::LEVEL_ADMIN, 'admin', null), 'rejects a missing token');
@@ -141,7 +142,7 @@ $decoded = $t->request(PluginRequest::LEVEL_ADMIN, 'admin', ['path' => '/home/al
 $t->is($decoded->param('path'), '/home/alice/a b&c', 'decodes an entity-encoded query string');
 
 $posted = $t->request(PluginRequest::LEVEL_ADMIN, 'admin', [], ['paths' => ['/home/alice/x', '/home/alice/y']], 'POST');
-$t->is(\count($posted->bodyList('paths')), 2, 'decodes repeated POST fields into a list');
+$t->is(count($posted->bodyList('paths')), 2, 'decodes repeated POST fields into a list');
 $t->ok($posted->isPost(), 'detects a POST');
 $t->is($posted->bodyList('missing'), [], 'a missing list field is empty, not an error');
 
@@ -194,7 +195,7 @@ $job = $plugin->jobs()->find($job->id);
 
 $t->is($exit, 0, 'the backup job exits cleanly');
 $t->ok(
-    \in_array($job->status(), [Job::STATUS_SUCCESS, Job::STATUS_WARNING], true),
+    in_array($job->status(), [Job::STATUS_SUCCESS, Job::STATUS_WARNING], true),
     'backup reports success (' . $job->status() . ': ' . $job->message() . ')'
 );
 $t->ok($job->stats() !== null, 'backup statistics are recorded');
@@ -202,7 +203,7 @@ $t->ok(($job->stats()['nfiles'] ?? 0) > 0, 'the archive contains files');
 
 $listing = $plugin->repository()->listArchives();
 $t->ok($listing['result']->isSuccessful(), 'archives can be listed');
-$t->is(\count($listing['archives']), 1, 'exactly one archive exists');
+$t->is(count($listing['archives']), 1, 'exactly one archive exists');
 $archive = $listing['archives'][0]->name;
 
 $t->group('Archive contents');
@@ -210,15 +211,15 @@ $t->group('Archive contents');
 $subtree = $plugin->repository()->listSubtree($archive, '/home/alice');
 $paths = array_map(static fn (array $row) => '/' . ltrim((string) $row['path'], '/'), $subtree['rows']);
 
-$t->ok(\in_array('/home/alice/.my.cnf', $paths, true), 'a root-only file IS in the archive');
-$t->ok(\in_array('/home/alice/.secret/notes.txt', $paths, true), 'a mode-0600 file IS in the archive');
-$t->ok(\in_array('/home/alice/domains/example.com/public_html/index.html', $paths, true), 'website content IS in the archive');
+$t->ok(in_array('/home/alice/.my.cnf', $paths, true), 'a root-only file IS in the archive');
+$t->ok(in_array('/home/alice/.secret/notes.txt', $paths, true), 'a mode-0600 file IS in the archive');
+$t->ok(in_array('/home/alice/domains/example.com/public_html/index.html', $paths, true), 'website content IS in the archive');
 
 $directory = $plugin->repository()->listDirectory($archive, '/home/alice');
 $names = array_map(static fn ($entry) => $entry->name, $directory->entries);
 
-$t->ok(\in_array('domains', $names, true), 'directory listing includes subdirectories');
-$t->notOk(\in_array('index.html', $names, true), 'directory listing is one level deep only');
+$t->ok(in_array('domains', $names, true), 'directory listing includes subdirectories');
+$t->notOk(in_array('index.html', $names, true), 'directory listing is one level deep only');
 $t->ok($directory->entries[0]->isDirectory(), 'directories sort before files');
 $t->notOk($directory->truncated, 'a small directory is not reported as truncated');
 
@@ -420,10 +421,10 @@ $plugin->config()->save(['prune_enabled' => true, 'keep_daily' => 1, 'keep_weekl
 $pruneArguments = $plugin->repository()->pruneArguments();
 
 $t->ok($pruneArguments !== null, 'prune arguments are produced');
-$t->ok(\in_array('--keep-daily=1', $pruneArguments, true), 'retention is passed to borg');
-$t->notOk(\in_array('--keep-weekly=0', $pruneArguments, true), 'rules set to 0 are omitted');
-$t->ok(\in_array('--glob-archives', $pruneArguments, true), 'pruning is scoped to this plugin\'s archive prefix');
-$t->ok(\in_array('test-*', $pruneArguments, true), 'the prefix glob matches the configured prefix');
+$t->ok(in_array('--keep-daily=1', $pruneArguments, true), 'retention is passed to borg');
+$t->notOk(in_array('--keep-weekly=0', $pruneArguments, true), 'rules set to 0 are omitted');
+$t->ok(in_array('--glob-archives', $pruneArguments, true), 'pruning is scoped to this plugin\'s archive prefix');
+$t->ok(in_array('test-*', $pruneArguments, true), 'the prefix glob matches the configured prefix');
 
 $pruneJob = $plugin->jobs()->create(Job::TYPE_PRUNE, 'test', []);
 $exit = $runJob($pruneJob);
@@ -792,13 +793,13 @@ $t->is($t->console(['borg:job', $queued->id])['exit'], 2, 'borg:job refuses to r
 $t->group('Job ordering');
 
 $ordering = [];
-for ($i = 0; $i < 5; $i++) {
+for ($i = 0; $i < 5; ++$i) {
     $ordering[] = $plugin->jobs()->create(Job::TYPE_CHECK, 'ordering-test', [])->id;
 }
-$t->ok(\count(array_unique($ordering)) === 5, 'ids created in a tight loop are unique');
+$t->ok(count(array_unique($ordering)) === 5, 'ids created in a tight loop are unique');
 
 $sorted = $ordering;
-rsort($sorted, SORT_STRING);
+rsort($sorted, \SORT_STRING);
 $t->is($sorted, array_reverse($ordering), 'ids sort by creation order even within the same second');
 
 $listed = array_map(
@@ -817,7 +818,7 @@ $detached = $t->waitForJob($plugin, $detached->id, 180);
 
 $t->ok($detached !== null && $detached->isFinished(), 'a detached job runs to completion after its parent exits');
 $t->ok(
-    $detached !== null && \in_array($detached->status(), [Job::STATUS_SUCCESS, Job::STATUS_WARNING], true),
+    $detached !== null && in_array($detached->status(), [Job::STATUS_SUCCESS, Job::STATUS_WARNING], true),
     'the detached backup succeeded (' . ($detached?->status() ?? 'missing') . ')'
 );
 

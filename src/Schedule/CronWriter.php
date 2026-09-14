@@ -21,7 +21,7 @@ final class CronWriter
     public function __construct(
         private readonly string $pluginDir,
         private readonly Paths $paths,
-        private readonly Filesystem $filesystem
+        private readonly Filesystem $filesystem,
     ) {
     }
 
@@ -33,8 +33,8 @@ final class CronWriter
             return;
         }
 
-        $php = (new PhpExecutableFinder())->find(false) ?: PHP_BINARY;
-        $command = sprintf('%s %s/bin/console borg:scheduled-backup', $php, $this->pluginDir);
+        $php = (new PhpExecutableFinder())->find(false) ?: \PHP_BINARY;
+        $command = \sprintf('%s %s/bin/console borg:scheduled-backup', $php, $this->pluginDir);
 
         $lines = [
             '# Managed by the DirectAdmin Borg plugin.',
@@ -50,11 +50,11 @@ final class CronWriter
         foreach (Paths::FORWARDED_ENV as $name) {
             $value = getenv($name);
             if (\is_string($value) && $value !== '') {
-                $lines[] = sprintf('%s=%s', $name, $value);
+                $lines[] = \sprintf('%s=%s', $name, $value);
             }
         }
 
-        $lines[] = sprintf('%s %s * * * root %s', $config->scheduleMinute(), $config->scheduleHour(), $command);
+        $lines[] = \sprintf('%s %s * * * root %s', $config->scheduleMinute(), $config->scheduleHour(), $command);
         $lines[] = '';
 
         $this->filesystem->dumpFile($this->paths->cronFile, implode("\n", $lines));

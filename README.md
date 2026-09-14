@@ -85,7 +85,7 @@ Admin Level → Plugin Manager → Add Plugin → upload `borg-<version>.tar.gz`
 Or from a shell:
 
 ```sh
-tar -xzf borg-1.2.0.tar.gz -C /usr/local/directadmin/plugins/
+tar -xzf borg-1.2.1.tar.gz -C /usr/local/directadmin/plugins/
 sh /usr/local/directadmin/plugins/borg/scripts/install.sh
 ```
 
@@ -96,7 +96,7 @@ directory.
 **From a source checkout**, build the tarball first:
 
 ```sh
-make package      # -> dist/borg-1.2.0.tar.gz
+make package      # -> dist/borg-1.2.1.tar.gz
 ```
 
 ---
@@ -357,6 +357,35 @@ endpoint only returns a job owned by the caller, and reports anything else as
 `404` rather than `403`, so it cannot be used to probe for job ids.
 
 ---
+
+## Code quality
+
+```sh
+make check     # phpstan + cs + lint + test
+```
+
+| Target | What it does |
+|---|---|
+| `make stan` | PHPStan at level 8 |
+| `make cs` | Coding standards, report only |
+| `make cs-fix` | Coding standards, apply |
+| `make lint` | Parse-check PHP, compile every Twig template |
+| `make test` | Full suite against real borg |
+
+PHPStan runs at **level 8** with no baseline and no ignored errors — the
+findings it raised were fixed rather than suppressed. Notably it caught a dead
+branch (`substr()` cannot return `false` in PHP 8), a property left behind by a
+refactor, and eight places where a nullable `Account` was dereferenced on the
+strength of a guard several methods away.
+
+Coding standards are PSR-12 plus the Symfony ruleset, with risky rules enabled:
+`strict_comparison` and `strict_param` catch real bugs, not just layout.
+
+All tooling runs in containers pinned to PHP 8.1, so results do not depend on
+the local PHP. Dev dependencies are `require-dev`, and `scripts/package.sh`
+builds `vendor/` inside its staging copy with `--no-dev`, so neither PHPStan nor
+PHP-CS-Fixer reaches a production server — and packaging never disturbs the
+working tree.
 
 ## Testing
 

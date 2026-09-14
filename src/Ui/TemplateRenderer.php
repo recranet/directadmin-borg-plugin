@@ -22,7 +22,7 @@ final class TemplateRenderer
 {
     private Environment $twig;
 
-    /** @var callable(array):string */
+    /** @var callable(array<string,scalar>):string */
     private $urlGenerator;
 
     public function __construct(string $templateDir, string $cacheDir)
@@ -50,7 +50,7 @@ final class TemplateRenderer
         $this->twig->addFilter(new TwigFilter('age', [Format::class, 'age']));
     }
 
-    /** @param callable(array):string $generator */
+    /** @param callable(array<string,scalar>):string $generator */
     public function setUrlGenerator(callable $generator): void
     {
         $this->urlGenerator = $generator;

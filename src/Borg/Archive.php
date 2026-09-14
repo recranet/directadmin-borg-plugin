@@ -9,7 +9,7 @@ final class Archive
 {
     public function __construct(
         public readonly string $name,
-        public readonly string $time
+        public readonly string $time,
     ) {
     }
 

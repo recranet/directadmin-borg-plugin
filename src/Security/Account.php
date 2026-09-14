@@ -22,7 +22,7 @@ final class Account
         public readonly string $username,
         public readonly string $home,
         public readonly int $uid,
-        public readonly int $gid
+        public readonly int $gid,
     ) {
     }
 
@@ -37,7 +37,7 @@ final class Account
 
         $entry = self::lookupPasswd($username, $paths->passwdFile);
         if ($entry === null) {
-            throw new BorgPluginException(sprintf('No local account named "%s".', $username));
+            throw new BorgPluginException(\sprintf('No local account named "%s".', $username));
         }
 
         [$uid, $gid, $home] = $entry;
@@ -59,7 +59,7 @@ final class Account
         // When DirectAdmin's user registry is present, require a real DA user
         // rather than any system account that happens to exist.
         if (is_dir($paths->daUsersDir) && !is_dir($paths->daUsersDir . '/' . $username)) {
-            throw new BorgPluginException(sprintf('"%s" is not a DirectAdmin user.', $username));
+            throw new BorgPluginException(\sprintf('"%s" is not a DirectAdmin user.', $username));
         }
 
         return new self($username, $home, $uid, $gid);

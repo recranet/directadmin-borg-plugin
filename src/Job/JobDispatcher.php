@@ -19,10 +19,8 @@ use Symfony\Component\Process\Process;
  */
 final class JobDispatcher
 {
-    public function __construct(
-        private readonly string $pluginDir,
-        private readonly Paths $paths
-    ) {
+    public function __construct(private readonly string $pluginDir)
+    {
     }
 
     public function dispatch(Job $job): void
@@ -32,7 +30,7 @@ final class JobDispatcher
             throw new BorgPluginException('Console application is missing: ' . $console);
         }
 
-        $php = (new PhpExecutableFinder())->find(false) ?: PHP_BINARY;
+        $php = (new PhpExecutableFinder())->find(false) ?: \PHP_BINARY;
 
         // Double-fork through sh so the worker becomes a grandchild: Symfony's
         // Process destructor stops any child it still owns, which would kill a
@@ -58,9 +56,7 @@ final class JobDispatcher
         $process->run();
 
         if (!$process->isSuccessful()) {
-            throw new BorgPluginException(
-                'Unable to start the background worker: ' . trim($process->getErrorOutput())
-            );
+            throw new BorgPluginException('Unable to start the background worker: ' . trim($process->getErrorOutput()));
         }
     }
 

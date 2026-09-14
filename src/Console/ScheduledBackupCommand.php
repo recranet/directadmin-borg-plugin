@@ -47,13 +47,13 @@ final class ScheduledBackupCommand extends Command
             'trigger' => (string) $input->getOption('trigger'),
         ]);
 
-        $output->writeln(sprintf('Running job %s', $job->id));
+        $output->writeln(\sprintf('Running job %s', $job->id));
 
         $exitCode = (new JobRunner($this->plugin, $this->plugin->jobs()))->run($job);
 
         $refreshed = $this->plugin->jobs()->find($job->id);
         if ($refreshed !== null) {
-            $output->writeln(sprintf('%s: %s', $refreshed->status(), $refreshed->message()));
+            $output->writeln(\sprintf('%s: %s', $refreshed->status(), $refreshed->message()));
         }
 
         return $exitCode;

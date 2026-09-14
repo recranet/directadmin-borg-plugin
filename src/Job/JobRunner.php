@@ -21,7 +21,7 @@ final class JobRunner
 
     public function __construct(
         private readonly Plugin $plugin,
-        private readonly JobRepository $jobs
+        private readonly JobRepository $jobs,
     ) {
     }
 
@@ -37,7 +37,7 @@ final class JobRunner
 
         try {
             if (!$repository->runner()->isInstalled()) {
-                return $this->finish($job, Job::STATUS_FAILED, 127, sprintf(
+                return $this->finish($job, Job::STATUS_FAILED, 127, \sprintf(
                     'borg is not installed or not executable (%s).',
                     $repository->runner()->binary()
                 ));
@@ -55,7 +55,7 @@ final class JobRunner
                 }
             }
 
-            $this->log($job, sprintf(
+            $this->log($job, \sprintf(
                 'Starting %s job using borg %s.',
                 $job->type(),
                 $repository->runner()->version() ?? 'unknown'
@@ -80,7 +80,7 @@ final class JobRunner
 
     private function runBackup(Job $job, Configuration $config, Repository $repository): int
     {
-        $this->log($job, sprintf('Archiving %d source path(s).', \count($config->sourcePaths())));
+        $this->log($job, \sprintf('Archiving %d source path(s).', \count($config->sourcePaths())));
 
         $result = $repository->runner()->run(
             $repository->createArguments(),
@@ -97,7 +97,7 @@ final class JobRunner
             // as soon as a second backup runs the same day, and borg's own
             // "Archive X already exists" gives no hint about where to fix it.
             if (stripos($message, 'already exists') !== false) {
-                $message .= sprintf(
+                $message .= \sprintf(
                     ' The archive name template ("%s") does not produce a unique name for this run.'
                     . ' Add more precision, for example {now:%%Y-%%m-%%d_%%H:%%M:%%S}.',
                     $config->archiveName()
@@ -264,7 +264,7 @@ final class JobRunner
             return $this->finish($job, Job::STATUS_FAILED, 1, 'Unable to create the destination directory: ' . $destination);
         }
 
-        $this->log($job, sprintf('Extracting %d path(s) from %s into %s.', \count($paths), $archive, $destination));
+        $this->log($job, \sprintf('Extracting %d path(s) from %s into %s.', \count($paths), $archive, $destination));
 
         $result = $repository->runner()->run(
             $repository->extractArguments($archive, $paths),
@@ -310,14 +310,13 @@ final class JobRunner
         $path = PathGuard::confine($path, $root);
 
         if ($path === rtrim($root, '/')) {
-            throw new \Recranet\DirectAdminBorg\Exception\UnsafePathException(
-                'Refusing to delete ' . $root . ' itself; choose a subdirectory.'
-            );
+            throw new \Recranet\DirectAdminBorg\Exception\UnsafePathException('Refusing to delete ' . $root . ' itself; choose a subdirectory.');
         }
 
         return $path;
     }
 
+    /** @return array<string,mixed>|null */
     private function extractStats(BorgResult $result): ?array
     {
         $decoded = $result->json();
@@ -348,9 +347,10 @@ final class JobRunner
 
     private function log(Job $job, string $line): void
     {
-        $this->jobs->appendLog($job, sprintf("[%s] %s\n", date('Y-m-d H:i:s'), rtrim($line, "\n")));
+        $this->jobs->appendLog($job, \sprintf("[%s] %s\n", date('Y-m-d H:i:s'), rtrim($line, "\n")));
     }
 
+    /** @param array<string,mixed>|null $stats */
     private function finish(Job $job, string $status, int $exitCode, string $message, ?array $stats = null): int
     {
         $this->log($job, $message);

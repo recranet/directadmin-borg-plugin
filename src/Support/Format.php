@@ -19,10 +19,10 @@ final class Format
 
         while ($value >= 1024 && $index < \count($units) - 1) {
             $value /= 1024;
-            $index++;
+            ++$index;
         }
 
-        return sprintf($index === 0 ? '%d %s' : '%.1f %s', $value, $units[$index]);
+        return \sprintf($index === 0 ? '%d %s' : '%.1f %s', $value, $units[$index]);
     }
 
     /**
@@ -65,7 +65,7 @@ final class Format
             if ($seconds >= $size) {
                 $count = intdiv($seconds, $size);
 
-                return sprintf('%d %s%s ago', $count, $label, $count === 1 ? '' : 's');
+                return \sprintf('%d %s%s ago', $count, $label, $count === 1 ? '' : 's');
             }
         }
 

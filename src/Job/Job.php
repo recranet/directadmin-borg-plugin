@@ -7,15 +7,15 @@ namespace Recranet\DirectAdminBorg\Job;
 /** A single background operation and its recorded state. */
 final class Job
 {
-    public const STATUS_QUEUED  = 'queued';
+    public const STATUS_QUEUED = 'queued';
     public const STATUS_RUNNING = 'running';
     public const STATUS_SUCCESS = 'success';
     public const STATUS_WARNING = 'warning';
-    public const STATUS_FAILED  = 'failed';
+    public const STATUS_FAILED = 'failed';
 
-    public const TYPE_BACKUP  = 'backup';
-    public const TYPE_PRUNE   = 'prune';
-    public const TYPE_CHECK   = 'check';
+    public const TYPE_BACKUP = 'backup';
+    public const TYPE_PRUNE = 'prune';
+    public const TYPE_CHECK = 'check';
     public const TYPE_RESTORE = 'restore';
 
     public const TYPES = [self::TYPE_BACKUP, self::TYPE_PRUNE, self::TYPE_CHECK, self::TYPE_RESTORE];
@@ -26,7 +26,7 @@ final class Job
     /** @param array<string,mixed> $data */
     public function __construct(
         public readonly string $id,
-        private array $data
+        private array $data,
     ) {
     }
 
@@ -49,7 +49,7 @@ final class Job
         $seconds = (int) $now;
         $microseconds = min(999999, (int) round(($now - $seconds) * 1000000));
 
-        return sprintf(
+        return \sprintf(
             '%s-%06d-%s-%s',
             date('Ymd-His', $seconds),
             $microseconds,
@@ -69,6 +69,7 @@ final class Job
         return $this->data[$key] ?? null;
     }
 
+    /** @param array<string,mixed> $changes */
     public function set(array $changes): void
     {
         $this->data = array_merge($this->data, $changes);
@@ -102,6 +103,7 @@ final class Job
         return \is_array($params) ? $params : [];
     }
 
+    /** @return array<string,mixed>|null */
     public function stats(): ?array
     {
         $stats = $this->data['stats'] ?? null;

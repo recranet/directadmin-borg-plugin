@@ -12,7 +12,7 @@ final class BorgResult
         public readonly string $stdout,
         public readonly string $stderr,
         public readonly string $commandLine,
-        public readonly bool $timedOut = false
+        public readonly bool $timedOut = false,
     ) {
     }
 
@@ -40,7 +40,7 @@ final class BorgResult
         if ($message === '') {
             $message = $this->timedOut
                 ? 'borg timed out.'
-                : sprintf('borg exited with code %d.', $this->exitCode);
+                : \sprintf('borg exited with code %d.', $this->exitCode);
         }
 
         // borg prints a full python traceback on some errors; the last line is
@@ -54,7 +54,7 @@ final class BorgResult
     }
 
     /** @return array<int,array<string,mixed>> one decoded object per output line */
-    public function jsonLines(int $limit = PHP_INT_MAX): array
+    public function jsonLines(int $limit = \PHP_INT_MAX): array
     {
         $rows = [];
         foreach (explode("\n", $this->stdout) as $line) {
@@ -74,6 +74,7 @@ final class BorgResult
         return $rows;
     }
 
+    /** @return array<string,mixed> */
     public function json(): array
     {
         $decoded = json_decode($this->stdout, true);

@@ -33,5 +33,9 @@
         "psr-4": {
             "Recranet\\DirectAdminBorg\\Test\\": "test/lib/"
         }
+    },
+    "require-dev": {
+        "friendsofphp/php-cs-fixer": "^3.95",
+        "phpstan/phpstan": "^2.2"
     }
 }

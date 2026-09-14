@@ -22,31 +22,35 @@ VERSION=$(sed -n 's/^version=//p' "$PLUGIN_DIR/plugin.conf" | head -n1)
 
 echo "==> Building borg $VERSION"
 
-# ------------------------------------------------------------ dependencies
-# Resolved in a container so the build does not depend on the local PHP
-# version; composer.json's platform pin keeps the result valid on PHP 8.1.
-if command -v docker >/dev/null 2>&1; then
-    docker run --rm -v "$PLUGIN_DIR":/app -w /app composer:2 \
-        composer install --no-dev --no-interaction --no-progress --optimize-autoloader
-elif command -v composer >/dev/null 2>&1; then
-    (cd "$PLUGIN_DIR" && composer install --no-dev --no-interaction --no-progress --optimize-autoloader)
-else
-    echo "ERROR: neither docker nor composer is available to build vendor/." >&2
-    exit 1
-fi
-
 # ------------------------------------------------------------------ staging
 mkdir -p "$STAGE/borg"
 
 # Everything the plugin needs at runtime, and nothing else: the test harness,
 # build tooling and VCS metadata have no business on a production server.
 for item in plugin.conf bootstrap.php composer.json composer.lock \
-            admin user bin hooks images src templates vendor scripts; do
+            admin user bin hooks images src templates scripts; do
     [ -e "$PLUGIN_DIR/$item" ] || continue
     cp -a "$PLUGIN_DIR/$item" "$STAGE/borg/"
 done
 
 rm -f "$STAGE/borg/scripts/package.sh"
+
+# ------------------------------------------------------------ dependencies
+# Built inside the staging copy, so packaging never disturbs the working tree's
+# vendor/ (which has the dev tools in it). --no-dev keeps phpstan and
+# php-cs-fixer out of the shipped tarball.
+echo "==> Installing runtime dependencies"
+if command -v docker >/dev/null 2>&1; then
+    docker run --rm -v "$STAGE/borg":/app -w /app composer:2 \
+        composer install --no-dev --no-interaction --no-progress --optimize-autoloader
+elif command -v composer >/dev/null 2>&1; then
+    (cd "$STAGE/borg" && composer install --no-dev --no-interaction --no-progress --optimize-autoloader)
+else
+    echo "ERROR: neither docker nor composer is available to build vendor/." >&2
+    exit 1
+fi
+
+[ -f "$STAGE/borg/vendor/autoload.php" ] || { echo "ERROR: vendor/ was not built." >&2; exit 1; }
 
 # Match what install.sh will enforce, so the tarball is already correct.
 find "$STAGE/borg" -type d -exec chmod 755 {} +

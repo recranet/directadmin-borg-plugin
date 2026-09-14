@@ -1,0 +1,22 @@
+parameters:
+    level: 8
+
+    paths:
+        - src
+        - test/lib
+        - test/lint-templates.php
+        - bootstrap.php
+
+    # DirectAdmin executes these through a shebang rather than including them,
+    # and they are procedural top-level scripts, so analysing them as library
+    # code produces noise rather than findings.
+    excludePaths:
+        analyse:
+            - test/run.php
+
+    # The plugin runs with -n (no php.ini) so a hardened CLI ini cannot disable
+    # proc_open. Extensions therefore have to be compiled in, and only these are
+    # relied upon.
+    phpVersion: 80100
+
+    treatPhpDocTypesAsCertain: false
