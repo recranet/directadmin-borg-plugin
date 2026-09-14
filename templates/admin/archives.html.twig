@@ -50,6 +50,33 @@
                     </span>
                 </div>
 
+                <div class="borg-field" style="border-left:3px solid var(--borg-err);padding-left:12px">
+                    <label><input type="checkbox" name="clean_first" value="1">Delete the site directory first (malware cleanup)</label>
+                    <span class="borg-hint">
+                        A restore normally only adds and overwrites, so a webshell the attacker left behind
+                        survives it. Tick this to delete the directory below before restoring, so nothing
+                        outside the archive is left. Requires <strong>Restore to the original location</strong>.
+                    </span>
+
+                    <div class="borg-inline" style="margin-top:10px">
+                        <div class="borg-field">
+                            <label for="borg-clean-dir">Directory to delete</label>
+                            <input type="text" id="borg-clean-dir" name="clean_dir" value="domains" style="max-width:280px">
+                            <span class="borg-hint">
+                                Relative to the account's home. Delete the whole
+                                <span class="borg-mono">domains/example.com</span> rather than just
+                                <span class="borg-mono">public_html</span> &mdash; if public_html is a symlink into a
+                                repository beside it, removing the link leaves the real files, malware included.
+                            </span>
+                        </div>
+                        <div class="borg-field">
+                            <label for="borg-clean-confirm">Type the username to confirm</label>
+                            <input type="text" id="borg-clean-confirm" name="clean_confirm" value=""
+                                   style="max-width:220px" autocapitalize="off" autocorrect="off" spellcheck="false">
+                        </div>
+                    </div>
+                </div>
+
                 <div class="borg-actions">
                     <button class="borg-btn borg-btn-primary" type="submit">Restore user</button>
                 </div>

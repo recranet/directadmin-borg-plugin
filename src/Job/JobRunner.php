@@ -221,6 +221,43 @@ final class JobRunner
         }
 
         $filesystem = $this->plugin->filesystem();
+
+        // Optional pre-clean. A restore is an overlay: borg cannot delete during
+        // an extract, so anything the archive does not contain survives it. That
+        // is wrong for malware cleanup, where the whole point is that files the
+        // attacker added must not come back.
+        $cleanTargets = (array) ($params['clean_paths'] ?? []);
+
+        // The root every deletion must sit inside. A user-level restore carries
+        // the account it belongs to; an admin restore-a-user names the home
+        // explicitly, because it deliberately does not set chown_to (borg
+        // restores the archived ownership instead).
+        $cleanRoot = $account !== null
+            ? $account->home
+            : trim((string) ($params['clean_root'] ?? ''));
+
+        if ($cleanTargets !== [] && $cleanRoot === '') {
+            return $this->finish($job, Job::STATUS_FAILED, 2, 'Restore job asks to delete files but names no root to confine that to.');
+        }
+
+        foreach ($cleanTargets as $cleanPath) {
+            // Re-validated here, not trusted from the job file: this deletes
+            // recursively as root.
+            $cleanPath = $this->assertCleanable((string) $cleanPath, PathGuard::normalize($cleanRoot));
+
+            if (!file_exists($cleanPath) && !is_link($cleanPath)) {
+                $this->log($job, 'Nothing to remove at ' . $cleanPath . '.');
+                continue;
+            }
+
+            $this->log($job, 'Removing ' . $cleanPath . ' before restoring.');
+            $filesystem->remove($cleanPath);
+
+            if (file_exists($cleanPath) || is_link($cleanPath)) {
+                return $this->finish($job, Job::STATUS_FAILED, 1, 'Could not remove ' . $cleanPath . ' before restoring.');
+            }
+        }
+
         $filesystem->mkdir($destination, 0750);
 
         if (!is_dir($destination)) {
@@ -253,6 +290,32 @@ final class JobRunner
             $result->exitCode,
             'Restored into ' . $destination
         );
+    }
+
+    /**
+     * Assert a path may be deleted: inside $root, and never $root itself.
+     *
+     * Removing the home directory outright would take mail, cron, SSH keys and
+     * anything else that is not part of a website with it, so a pre-clean is
+     * always a subdirectory.
+     *
+     * @throws \Recranet\DirectAdminBorg\Exception\UnsafePathException
+     */
+    private function assertCleanable(string $path, string $root): string
+    {
+        if ($root === '' || $root === '/') {
+            throw new \Recranet\DirectAdminBorg\Exception\UnsafePathException('No safe root for a pre-clean.');
+        }
+
+        $path = PathGuard::confine($path, $root);
+
+        if ($path === rtrim($root, '/')) {
+            throw new \Recranet\DirectAdminBorg\Exception\UnsafePathException(
+                'Refusing to delete ' . $root . ' itself; choose a subdirectory.'
+            );
+        }
+
+        return $path;
     }
 
     private function extractStats(BorgResult $result): ?array

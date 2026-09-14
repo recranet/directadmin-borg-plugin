@@ -574,6 +574,107 @@ $t->is(trim((string) @file_get_contents($live)), '<h1>alice site</h1>', 'the liv
 $t->ok(is_file('/home/alice/added-after-the-backup.txt'), 'a file created after the backup survives: a restore is an overlay, not a mirror');
 $t->is((int) stat($live)['uid'], $aliceUid, 'the restored live file still belongs to the account');
 
+$t->group('Pre-clean before restoring (malware cleanup)');
+
+$adminTokenFor = static fn () => (new CsrfTokenizer($plugin->paths, $plugin->filesystem()))
+    ->token(PluginRequest::LEVEL_ADMIN, 'admin');
+
+$restoreClean = static function (array $extra) use ($t, $archive, $adminTokenFor) {
+    return $t->page('admin', 'admin', ['tab' => 'archives', 'archive' => $archive], array_merge([
+        'action'     => 'restore_user',
+        'archive'    => $archive,
+        'username'   => 'alice',
+        'in_place'   => '1',
+        'csrf_token' => $adminTokenFor(),
+    ], $extra), 'POST');
+};
+
+// The real shape of the problem: public_html is a symlink into a repository
+// checkout beside it, so deleting public_html alone leaves the actual files.
+$siteDir = '/home/alice/domains/example.com';
+@mkdir($siteDir . '/repo/wp-content', 0755, true);
+@file_put_contents($siteDir . '/repo/shell.php', '<?php /* webshell */');
+@file_put_contents($siteDir . '/repo/index.php', 'clean');
+$plugin->filesystem()->remove($siteDir . '/public_html');
+@symlink($siteDir . '/repo', $siteDir . '/public_html');
+$t->ok(is_link($siteDir . '/public_html'), 'public_html is a symlink into the repo checkout, as on a real deploy');
+
+// Deleting only public_html would unlink the symlink and leave the webshell.
+$plugin->filesystem()->remove($siteDir . '/public_html');
+$t->ok(is_file($siteDir . '/repo/shell.php'), 'deleting public_html alone leaves the webshell behind: the symlink goes, the files stay');
+@symlink($siteDir . '/repo', $siteDir . '/public_html');
+
+$out = $restoreClean(['clean_first' => '1', 'clean_dir' => 'domains', 'clean_confirm' => 'alice']);
+$t->contains($out, 'will be deleted first', 'the pre-clean is announced');
+$t->contains($out, '/home/alice/domains', 'the message names exactly what is deleted');
+
+$cleanJob = $plugin->jobs()->recent(1)[0];
+$t->is($cleanJob->params()['clean_paths'], ['/home/alice/domains'], 'the job records the directory to delete');
+$t->ok($t->waitForJob($plugin, $cleanJob->id, 180)?->status() === Job::STATUS_SUCCESS, 'the clean restore completes');
+
+$t->notOk(is_file($siteDir . '/repo/shell.php'), 'the webshell is gone: deleting the domains directory reaches the symlink target too');
+$t->notOk(is_dir($siteDir . '/repo'), 'the repository checkout beside public_html is gone');
+$t->ok(is_file('/home/alice/domains/example.com/public_html/index.html'), 'the archived site is restored in its place');
+$t->is((int) stat('/home/alice/domains')['uid'], $aliceUid, 'the rebuilt tree belongs to the account');
+
+$t->group('Pre-clean never follows a symlink out of the home');
+
+// The dangerous case: a symlink inside the deleted tree pointing outside it.
+// Removing the link must not touch what it points at.
+@mkdir('/home/alice/domains/evil.com', 0755, true);
+@symlink('/etc', '/home/alice/domains/evil.com/escape');
+@file_put_contents('/etc/borg-canary.txt', 'must survive');
+$t->ok(is_link('/home/alice/domains/evil.com/escape'), 'a symlink to /etc exists inside the tree to be deleted');
+
+$restoreClean(['clean_first' => '1', 'clean_dir' => 'domains', 'clean_confirm' => 'alice']);
+$escapeJob = $plugin->jobs()->recent(1)[0];
+$t->ok($t->waitForJob($plugin, $escapeJob->id, 180)?->status() === Job::STATUS_SUCCESS, 'the restore completes');
+
+$t->notOk(is_link('/home/alice/domains/evil.com/escape'), 'the symlink itself is removed');
+$t->ok(is_file('/etc/borg-canary.txt'), 'the symlink target is untouched: deletion does not follow links out of the home');
+$t->ok(is_file('/etc/passwd'), '/etc is intact');
+@unlink('/etc/borg-canary.txt');
+
+$t->group('Pre-clean guards');
+
+$t->contains(
+    $restoreClean(['clean_first' => '1', 'clean_dir' => 'domains', 'clean_confirm' => 'wrong']),
+    'Type the username to confirm',
+    'a wrong confirmation blocks the deletion'
+);
+$t->contains(
+    $restoreClean(['clean_first' => '1', 'clean_dir' => '', 'clean_confirm' => 'alice']),
+    'Name the directory to delete',
+    'an empty directory is rejected'
+);
+$t->contains(
+    $restoreClean(['clean_first' => '1', 'clean_dir' => '/etc', 'clean_confirm' => 'alice']),
+    'outside the permitted directory',
+    'a directory outside the home is rejected'
+);
+$t->contains(
+    $restoreClean(['clean_first' => '1', 'clean_dir' => '../bob', 'clean_confirm' => 'alice']),
+    'outside the permitted directory',
+    'traversal into another account is rejected'
+);
+$t->contains(
+    $restoreClean(['clean_first' => '1', 'clean_dir' => '.', 'clean_confirm' => 'alice']),
+    'Refusing to delete the whole home directory',
+    'deleting the home itself is refused'
+);
+$t->contains(
+    $restoreClean(['clean_first' => '1', 'clean_dir' => '/home/alice', 'clean_confirm' => 'alice']),
+    'Refusing to delete the whole home directory',
+    'naming the home by its absolute path is also refused'
+);
+$t->ok(is_file('/home/alice/.my.cnf'), 'none of the rejected attempts deleted anything');
+
+// A pre-clean only makes sense in place; without it the staging copy is
+// untouched and nothing is deleted.
+$out = $restoreClean(['in_place' => '0', 'clean_first' => '1', 'clean_dir' => 'domains', 'clean_confirm' => 'alice']);
+$t->notContains($out, 'will be deleted first', 'a staging restore never deletes anything');
+$t->ok(is_dir('/home/alice/domains'), 'the live site survives a staging restore');
+
 $t->group('In-place restores stay scoped');
 
 // The scope is checked when the job is queued, not trusted from the request.

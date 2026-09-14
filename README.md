@@ -85,7 +85,7 @@ Admin Level → Plugin Manager → Add Plugin → upload `borg-<version>.tar.gz`
 Or from a shell:
 
 ```sh
-tar -xzf borg-1.1.0.tar.gz -C /usr/local/directadmin/plugins/
+tar -xzf borg-1.2.0.tar.gz -C /usr/local/directadmin/plugins/
 sh /usr/local/directadmin/plugins/borg/scripts/install.sh
 ```
 
@@ -96,7 +96,7 @@ directory.
 **From a source checkout**, build the tarball first:
 
 ```sh
-make package      # -> dist/borg-1.1.0.tar.gz
+make package      # -> dist/borg-1.2.0.tar.gz
 ```
 
 ---
@@ -223,6 +223,27 @@ one before:
    that the account exists, tick **Restore to the original location** to put the
    home directory back in place.
 
+#### Cleaning up a compromised site
+
+A restore is an overlay: borg cannot delete during an extract, so a webshell the
+attacker left behind survives one. For malware cleanup, tick **Delete the site
+directory first** on the restore-a-user form. It removes the named directory
+before extracting, so only what is in the archive comes back.
+
+Delete the whole `domains/example.com`, not just `public_html`. Where
+`public_html` is a symlink into a repository checkout beside it, removing the
+link deletes the link and leaves the real files — malware included.
+
+Deletion is confined to the account's home, refuses the home directory itself
+(that would take mail, cron and SSH keys with it), and needs the username typed
+back. It never follows a symlink out of the tree: the link is removed, whatever
+it points at is not.
+
+Files are only half of it. Databases and DirectAdmin configuration live in the
+admin backup, so if the account was already compromised when that archive was
+taken, restoring it restores the compromise. Pick an archive from before the
+break-in, and rotate database, FTP and SSH credentials afterwards.
+
 Step 5 is an overlay, not a mirror: files in the archive are written over what
 is there now, and anything created since the backup is left alone. borg cannot
 delete files during an extract. For a freshly recreated account the home is
@@ -346,7 +367,7 @@ make test
 Builds a container pinned to **PHP 8.1** (matching the native CLI on the target
 servers, so 8.2+ syntax cannot sneak in) with a real borg and a `/home`
 containing two customer accounts at DirectAdmin's `0711` permissions. It then
-installs the plugin with the production `install.sh` and runs 244 checks,
+installs the plugin with the production `install.sh` and runs 268 checks,
 driving the real entry points the way DirectAdmin does — environment in, stdout
 out.
 

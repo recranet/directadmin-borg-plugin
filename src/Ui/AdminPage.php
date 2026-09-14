@@ -389,7 +389,36 @@ final class AdminPage
         $inPlace = $this->request->bodyBool('in_place');
         $scopedRoots = $inPlace ? [$account->home, $config->adminBackupsDir()] : null;
 
-        $this->queueRestore($archive, $paths, $destination, $username, $scopedRoots);
+        // Optional pre-clean, for the malware case: delete the site directory so
+        // files the attacker added do not survive the restore. Only meaningful
+        // in place, and only ever with the operator asking for it by name.
+        $cleanPaths = [];
+        if ($inPlace && $this->request->bodyBool('clean_first')) {
+            $cleanDir = trim($this->request->body()->getString('clean_dir'));
+
+            if ($cleanDir === '') {
+                $this->flash->error('Name the directory to delete before restoring.');
+
+                return;
+            }
+            if ($this->request->body()->getString('clean_confirm') !== $username) {
+                $this->flash->error('Type the username to confirm deleting files before the restore.');
+
+                return;
+            }
+
+            // Relative names are read against the account's home, so "domains"
+            // means this user's domains and nothing else.
+            $absolute = str_starts_with($cleanDir, '/')
+                ? $cleanDir
+                : $account->home . '/' . ltrim($cleanDir, '/');
+
+            $cleanPaths[] = $this->assertCleanable($absolute, $account->home);
+        }
+
+        // The worker re-validates the deletion against this root rather than
+        // trusting the paths in the job file.
+        $this->queueRestore($archive, $paths, $destination, $username, $scopedRoots, $cleanPaths, $account->home);
 
         $contents = $adminBackup !== null
             ? 'home directory and ' . basename($adminBackup->path)
@@ -397,10 +426,12 @@ final class AdminPage
 
         $this->flash->success($inPlace
             ? sprintf(
-                'Restoring %s (%s) to its original location. Existing files are overwritten; '
-                . 'files added since the backup are left alone. Follow it under Jobs.',
+                'Restoring %s (%s) to its original location.%s Follow it under Jobs.',
                 $username,
-                $contents
+                $contents,
+                $cleanPaths !== []
+                    ? ' ' . implode(' and ', $cleanPaths) . ' will be deleted first, so nothing outside the archive survives.'
+                    : ' Existing files are overwritten; files added since the backup are left alone.'
             )
             : sprintf('Restoring %s (%s) into %s. Follow it under Jobs.', $username, $contents, $destination));
     }
@@ -479,6 +510,23 @@ final class AdminPage
         return PathGuard::normalize($destination === '' ? '/home/admin/borg_restore' : $destination);
     }
 
+    /**
+     * A path the restore may delete first: inside the account's home, and never
+     * the home itself. Mirrors the check the worker repeats before deleting.
+     */
+    private function assertCleanable(string $path, string $home): string
+    {
+        $normalized = PathGuard::confine($path, $home);
+
+        if ($normalized === rtrim($home, '/')) {
+            throw new BorgPluginException(
+                'Refusing to delete the whole home directory. Name a subdirectory such as "domains".'
+            );
+        }
+
+        return $normalized;
+    }
+
     private function isPlausibleUsername(string $username): bool
     {
         return (bool) preg_match('/^[a-z_][a-z0-9_-]{0,31}$/i', $username);
@@ -505,7 +553,9 @@ final class AdminPage
         array $paths,
         string $destination,
         ?string $username = null,
-        ?array $scopedRoots = null
+        ?array $scopedRoots = null,
+        array $cleanPaths = [],
+        ?string $cleanRoot = null
     ): Job {
         $paths = array_map([PathGuard::class, 'normalize'], $paths);
 
@@ -543,6 +593,8 @@ final class AdminPage
             'destination'  => $destination,
             'restore_user' => $username,
             'in_place'     => $scopedRoots !== null ? true : null,
+            'clean_paths'  => $cleanPaths !== [] ? $cleanPaths : null,
+            'clean_root'   => $cleanPaths !== [] ? $cleanRoot : null,
             'trigger'      => 'manual',
         ], static fn ($value) => $value !== null));
 
