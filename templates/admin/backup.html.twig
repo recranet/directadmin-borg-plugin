@@ -112,6 +112,38 @@
     </div>
 
     <div class="borg-card">
+        <h2>DirectAdmin backups</h2>
+
+        <p class="borg-note" style="margin-top:0">
+            DirectAdmin writes a per-user backup containing everything that is <em>not</em> in the
+            home directory &mdash; the account's DirectAdmin configuration and its database dumps.
+            Restoring a home directory alone gives back the files but not the account.
+        </p>
+
+        <div class="borg-field">
+            <label for="borg-admin-backups">Admin backups location</label>
+            <input type="text" id="borg-admin-backups" name="admin_backups_dir" value="{{ config.admin_backups_dir }}">
+            <span class="borg-hint">
+                Where DirectAdmin writes them, normally <code>/home/admin/admin_backups</code>.
+                Files are matched as <code>&lt;username&gt;.tar.zst</code>, <code>.tar.gz</code>,
+                <code>.tar.bz2</code> or <code>.tar</code>.
+            </span>
+        </div>
+
+        {% if not admin_backups_covered %}
+            <div class="borg-alert borg-alert-warn">
+                <strong>{{ config.admin_backups_dir }}</strong> is not covered by any source path above,
+                so these backups are not in your archives. Restoring a user from them will not be possible.
+            </div>
+        {% endif %}
+
+        <div class="borg-field">
+            <label><input type="checkbox" name="restore_admin_backup" value="1"{{ config.restore_admin_backup ? ' checked' : '' }}>Include the DirectAdmin backup when restoring a user</label>
+            <span class="borg-hint">Restores <code>&lt;username&gt;.tar.zst</code> alongside the home directory.</span>
+        </div>
+    </div>
+
+    <div class="borg-card">
         <h2>User restores</h2>
 
         <div class="borg-field">

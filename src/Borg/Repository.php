@@ -165,6 +165,38 @@ final class Repository
         );
     }
 
+    /**
+     * Extensions DirectAdmin may have written an admin backup with, in the
+     * order they are preferred when more than one is present.
+     */
+    public const ADMIN_BACKUP_EXTENSIONS = ['tar.zst', 'tar.gz', 'tar.bz2', 'tar'];
+
+    /**
+     * Find a user's DirectAdmin admin backup inside an archive.
+     *
+     * DirectAdmin names these <username>.<ext>, and the extension depends on
+     * the compression configured when the backup ran, so the archive is asked
+     * rather than guessed at.
+     */
+    public function findAdminBackup(string $archive, string $adminBackupsDir, string $username): ?ArchiveEntry
+    {
+        $candidates = [];
+        foreach ($this->listDirectory($archive, $adminBackupsDir)->entries as $entry) {
+            if (!$entry->isDirectory()) {
+                $candidates[$entry->name] = $entry;
+            }
+        }
+
+        foreach (self::ADMIN_BACKUP_EXTENSIONS as $extension) {
+            $name = $username . '.' . $extension;
+            if (isset($candidates[$name])) {
+                return $candidates[$name];
+            }
+        }
+
+        return null;
+    }
+
     /** Arguments for a backup run. */
     public function createArguments(): array
     {

@@ -6,10 +6,12 @@ namespace Recranet\DirectAdminBorg\Ui;
 
 use Recranet\DirectAdminBorg\Borg\Archive;
 use Recranet\DirectAdminBorg\Borg\ArchiveEntry;
+use Recranet\DirectAdminBorg\Borg\Repository;
 use Recranet\DirectAdminBorg\Config\Configuration;
 use Recranet\DirectAdminBorg\Http\PluginRequest;
 use Recranet\DirectAdminBorg\Job\Job;
 use Recranet\DirectAdminBorg\Plugin;
+use Recranet\DirectAdminBorg\Security\Account;
 use Recranet\DirectAdminBorg\Security\CsrfTokenizer;
 use Recranet\DirectAdminBorg\Security\PathGuard;
 use Recranet\DirectAdminBorg\Support\Format;
@@ -35,6 +37,9 @@ final class AdminPage
     private const PROTECTED_DESTINATIONS = ['/', '/usr', '/etc', '/var', '/bin', '/sbin', '/lib', '/lib64', '/boot', '/home', '/root'];
 
     private FlashBag $flash;
+
+    /** Set when a restore-a-user attempt named an account DirectAdmin does not have. */
+    private ?string $missingAccount = null;
 
     public function __construct(
         private readonly Plugin $plugin,
@@ -117,6 +122,8 @@ final class AdminPage
                 'break_lock'      => $this->breakLock(),
                 'delete_archive'  => $this->deleteArchive(),
                 'restore'         => $this->restore(),
+                'restore_user'    => $this->restoreUser(),
+                'restore_admin_backup' => $this->restoreAdminBackupOnly(),
                 default           => $this->flash->error('Unknown action.'),
             };
         } catch (\Throwable $e) {
@@ -295,45 +302,184 @@ final class AdminPage
 
         $archive = $this->request->body()->getString('archive');
         $paths = $this->request->bodyList('paths');
-        $destination = trim($this->request->body()->getString('destination'));
 
         if ($archive === '' || $paths === []) {
             $this->flash->error('Select at least one item to restore.');
 
             return;
         }
-        if ($destination === '') {
+        if (trim($this->request->body()->getString('destination')) === '') {
             $this->flash->error('A restore destination is required.');
 
             return;
         }
 
-        $destination = PathGuard::normalize($destination);
+        $destination = $this->restoreDestination();
+        $this->queueRestore($archive, $paths, $destination);
 
-        if (\in_array($destination, self::PROTECTED_DESTINATIONS, true)) {
+        $this->flash->success(sprintf(
+            'Restoring %d item(s) into %s. Follow it under Jobs.',
+            \count($paths),
+            $destination
+        ));
+    }
+
+    /**
+     * Restore a whole user: their home directory plus the DirectAdmin admin
+     * backup holding their configuration and databases.
+     *
+     * The account must already exist in DirectAdmin. Restoring a home directory
+     * for an account DirectAdmin does not know about would leave orphaned files
+     * with no owner, and this plugin deliberately does not create accounts —
+     * DirectAdmin's own restore does that, from the very tarball this can
+     * extract for you.
+     */
+    private function restoreUser(): void
+    {
+        if (!$this->ensureReady()) {
+            return;
+        }
+
+        $config = $this->plugin->config()->load();
+        $archive = $this->request->body()->getString('archive');
+        $username = trim($this->request->body()->getString('username'));
+        $destination = $this->restoreDestination();
+
+        if ($archive === '' || $username === '') {
+            $this->flash->error('Choose an archive and a username.');
+
+            return;
+        }
+
+        $account = null;
+        try {
+            $account = Account::resolve($username, $this->plugin->paths);
+        } catch (\Throwable $e) {
+            // Deliberately not a fallback to /home/<username>: see the note
+            // above. Tell the operator what to do and let them decide.
+            $this->missingAccount = $username;
             $this->flash->error(sprintf(
-                'Refusing to restore directly into %s. Restore into a staging directory and move files from there.',
-                $destination
+                '%s Create the user in DirectAdmin first, then restore their files. '
+                . 'If the account is gone entirely, restore its DirectAdmin backup below and '
+                . 'use Admin Level -> Restore Backups to recreate the account, then come back here.',
+                $e->getMessage()
             ));
 
             return;
         }
 
-        $normalized = array_map([PathGuard::class, 'normalize'], $paths);
+        $paths = [$account->home];
 
-        $job = $this->plugin->jobs()->create(Job::TYPE_RESTORE, $this->request->username, [
-            'archive'     => $archive,
-            'paths'       => $normalized,
-            'destination' => $destination,
-            'trigger'     => 'manual',
-        ]);
-        $this->plugin->dispatcher()->dispatch($job);
+        $adminBackup = $config->restoreAdminBackup()
+            ? $this->plugin->repository()->findAdminBackup($archive, $config->adminBackupsDir(), $username)
+            : null;
+
+        if ($config->restoreAdminBackup() && $adminBackup === null) {
+            $this->flash->warning(sprintf(
+                'No DirectAdmin backup for "%s" was found in %s in this archive, so only the home directory '
+                . 'is being restored. Databases and account configuration live in that backup, not in the home directory.',
+                $username,
+                $config->adminBackupsDir()
+            ));
+        } elseif ($adminBackup !== null) {
+            $paths[] = $adminBackup->path;
+        }
+
+        $job = $this->queueRestore($archive, $paths, $destination, $username);
 
         $this->flash->success(sprintf(
-            'Restoring %d item(s) into %s. Follow it under Jobs.',
-            \count($normalized),
+            'Restoring %s into %s%s. Follow it under Jobs.',
+            $username,
+            $destination,
+            $adminBackup !== null ? ' (home directory and ' . basename($adminBackup->path) . ')' : ' (home directory only)'
+        ));
+    }
+
+    /**
+     * Restore only a user's DirectAdmin backup tarball.
+     *
+     * This is the chicken-and-egg case: the account no longer exists, and the
+     * tarball is exactly what DirectAdmin's own restore needs in order to
+     * recreate it. Always an explicit action, never something that happens on
+     * the operator's behalf.
+     */
+    private function restoreAdminBackupOnly(): void
+    {
+        if (!$this->ensureReady()) {
+            return;
+        }
+
+        $config = $this->plugin->config()->load();
+        $archive = $this->request->body()->getString('archive');
+        $username = trim($this->request->body()->getString('username'));
+        $destination = $this->restoreDestination();
+
+        if ($archive === '' || !$this->isPlausibleUsername($username)) {
+            $this->flash->error('Choose an archive and a valid username.');
+
+            return;
+        }
+
+        $adminBackup = $this->plugin->repository()->findAdminBackup($archive, $config->adminBackupsDir(), $username);
+
+        if ($adminBackup === null) {
+            $this->flash->error(sprintf(
+                'No DirectAdmin backup for "%s" was found in %s in this archive. Looked for %s.',
+                $username,
+                $config->adminBackupsDir(),
+                implode(', ', array_map(
+                    static fn (string $extension) => $username . '.' . $extension,
+                    Repository::ADMIN_BACKUP_EXTENSIONS
+                ))
+            ));
+
+            return;
+        }
+
+        $this->queueRestore($archive, [$adminBackup->path], $destination, $username);
+
+        $this->flash->success(sprintf(
+            'Restoring %s into %s. Once it finishes, use Admin Level -> Restore Backups to recreate the account, '
+            . 'then return here to restore the home directory.',
+            basename($adminBackup->path),
             $destination
         ));
+    }
+
+    /** Where a restore-a-user run writes, defaulting to a staging directory. */
+    private function restoreDestination(): string
+    {
+        $destination = trim($this->request->body()->getString('destination'));
+
+        return PathGuard::normalize($destination === '' ? '/home/admin/borg_restore' : $destination);
+    }
+
+    private function isPlausibleUsername(string $username): bool
+    {
+        return (bool) preg_match('/^[a-z_][a-z0-9_-]{0,31}$/i', $username);
+    }
+
+    /** @param string[] $paths */
+    private function queueRestore(string $archive, array $paths, string $destination, ?string $username = null): \Recranet\DirectAdminBorg\Job\Job
+    {
+        if (\in_array($destination, self::PROTECTED_DESTINATIONS, true)) {
+            throw new \Recranet\DirectAdminBorg\Exception\BorgPluginException(sprintf(
+                'Refusing to restore directly into %s. Restore into a staging directory and move files from there.',
+                $destination
+            ));
+        }
+
+        $job = $this->plugin->jobs()->create(Job::TYPE_RESTORE, $this->request->username, array_filter([
+            'archive'      => $archive,
+            'paths'        => array_map([PathGuard::class, 'normalize'], $paths),
+            'destination'  => $destination,
+            'restore_user' => $username,
+            'trigger'      => 'manual',
+        ], static fn ($value) => $value !== null));
+
+        $this->plugin->dispatcher()->dispatch($job);
+
+        return $job;
     }
 
     private function ensureReady(): bool
@@ -406,6 +552,9 @@ final class AdminPage
         return [
             'cron_file'            => $this->plugin->cron()->file(),
             'schedule_description' => $config->describeSchedule(),
+            // Warn rather than silently produce archives that cannot restore an
+            // account: the admin backups hold the databases and DA config.
+            'admin_backups_covered' => $config->covers($config->adminBackupsDir()),
         ];
     }
 
@@ -417,15 +566,21 @@ final class AdminPage
 
         $archive = $this->request->param('archive');
         if ($archive !== '') {
-            return ['archives' => [], 'error' => null, 'browser' => $this->browserContext($archive)];
+            return [
+                'archives'     => [],
+                'error'        => null,
+                'browser'      => $this->browserContext($archive),
+                'user_restore' => $this->userRestoreContext($archive, $config),
+            ];
         }
 
         $listing = $this->plugin->repository()->listArchives();
 
         return [
-            'browser'  => null,
-            'error'    => $listing['result']->isSuccessful() ? null : $listing['result']->errorMessage(),
-            'archives' => array_map(
+            'browser'      => null,
+            'user_restore' => null,
+            'error'        => $listing['result']->isSuccessful() ? null : $listing['result']->errorMessage(),
+            'archives'     => array_map(
                 static fn (Archive $a) => ['name' => $a->name, 'time' => $a->time],
                 $listing['archives']
             ),
@@ -451,6 +606,26 @@ final class AdminPage
             'entries'             => array_map([$this, 'entryToArray'], $listing->entries),
             'truncated'           => $listing->truncated,
             'error'               => $listing->readable ? null : $listing->error,
+            'default_destination' => '/home/admin/borg_restore',
+        ];
+    }
+
+    /**
+     * State for the "restore a whole user" panel.
+     *
+     * $missingAccount is set when the operator just tried to restore a user
+     * DirectAdmin does not have, which is what turns the admin-backup-only
+     * button on.
+     */
+    private function userRestoreContext(string $archive, Configuration $config): array
+    {
+        return [
+            'archive'            => $archive,
+            'admin_backups_dir'  => $config->adminBackupsDir(),
+            'enabled'            => $config->restoreAdminBackup(),
+            'covered'            => $config->covers($config->adminBackupsDir()),
+            'missing_account'    => $this->missingAccount,
+            'username'           => trim($this->request->body()->getString('username')),
             'default_destination' => '/home/admin/borg_restore',
         ];
     }

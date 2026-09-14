@@ -32,12 +32,30 @@ final class Job
 
     public static function isValidId(string $id): bool
     {
-        return (bool) preg_match('/^\d{8}-\d{6}-[a-z]+-[0-9a-f]{8}$/', $id);
+        return (bool) preg_match('/^\d{8}-\d{6}-\d{6}-[a-z]+-[0-9a-f]{8}$/', $id);
     }
 
+    /**
+     * A sortable id: date, time, microseconds, type, random suffix.
+     *
+     * The microseconds matter. Job listings are ordered by filename, which is
+     * far cheaper than reading every record to sort on a field — but with only
+     * second resolution, two jobs started in the same second would order by
+     * their random suffix, i.e. arbitrarily.
+     */
     public static function generateId(string $type): string
     {
-        return sprintf('%s-%s-%s', date('Ymd-His'), $type, bin2hex(random_bytes(4)));
+        $now = microtime(true);
+        $seconds = (int) $now;
+        $microseconds = min(999999, (int) round(($now - $seconds) * 1000000));
+
+        return sprintf(
+            '%s-%06d-%s-%s',
+            date('Ymd-His', $seconds),
+            $microseconds,
+            $type,
+            bin2hex(random_bytes(4))
+        );
     }
 
     /** @return array<string,mixed> */

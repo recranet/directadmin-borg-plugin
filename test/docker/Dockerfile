@@ -48,5 +48,15 @@ RUN mkdir -p /home/alice/domains/example.com/public_html /home/alice/.secret \
     && chmod 0600 /home/bob/secret.txt \
     && chown -R bob:bob /home/bob
 
+# DirectAdmin's own per-user backups: the config and database dumps that do not
+# live in the home directory. Two compressions on purpose, since which one is
+# written depends on the server's backup settings.
+RUN mkdir -p /home/admin/admin_backups \
+    && echo 'alice config and databases' > /home/admin/admin_backups/alice.tar.zst \
+    && echo 'bob config and databases' > /home/admin/admin_backups/bob.tar.gz \
+    && echo 'a user that no longer exists' > /home/admin/admin_backups/ghost.tar.gz \
+    && chown -R admin:admin /home/admin/admin_backups \
+    && chmod 0700 /home/admin/admin_backups
+
 WORKDIR /plugin
 ENTRYPOINT ["/bin/bash"]

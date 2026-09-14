@@ -105,6 +105,18 @@ final class ConfigConstraints
             'keep_monthly' => [new Assert\Range(min: 0, max: 9999, notInRangeMessage: 'Monthly retention must be between 0 and 9999.')],
             'schedule_minute' => [new CronField(min: 0, max: 59, label: 'Schedule minute')],
             'schedule_hour'   => [new CronField(min: 0, max: 23, label: 'Schedule hour')],
+            'admin_backups_dir' => [
+                new Assert\NotBlank(message: 'Admin backups directory must not be empty.'),
+                new Assert\Regex(
+                    pattern: '#^/#',
+                    message: 'Admin backups directory must be an absolute path.',
+                ),
+                new Assert\Regex(
+                    pattern: '/[\r\n\0]/',
+                    match: false,
+                    message: 'Admin backups directory must be a single line.',
+                ),
+            ],
             'user_restore_dir' => [
                 new Assert\NotBlank(message: 'Restore directory must not be empty.'),
                 new Assert\Regex(
@@ -119,6 +131,7 @@ final class ConfigConstraints
             'compact_after_prune'  => [new Assert\Type('bool')],
             'schedule_enabled'     => [new Assert\Type('bool')],
             'run_after_da_backups' => [new Assert\Type('bool')],
+            'restore_admin_backup' => [new Assert\Type('bool')],
             'user_restore_enabled' => [new Assert\Type('bool')],
         ];
     }

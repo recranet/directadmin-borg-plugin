@@ -121,13 +121,31 @@ final class ConfigRepository
         foreach (['source_paths', 'exclude_patterns'] as $key) {
             $values[$key] = $this->toLines($values[$key] ?? []);
         }
-        foreach (['one_file_system', 'prune_enabled', 'compact_after_prune', 'schedule_enabled', 'run_after_da_backups', 'user_restore_enabled'] as $key) {
+        foreach ([
+            'one_file_system',
+            'prune_enabled',
+            'compact_after_prune',
+            'schedule_enabled',
+            'run_after_da_backups',
+            'restore_admin_backup',
+            'user_restore_enabled',
+        ] as $key) {
             $values[$key] = $this->toBool($values[$key] ?? false);
         }
         foreach (['keep_daily', 'keep_weekly', 'keep_monthly'] as $key) {
             $values[$key] = is_numeric($values[$key] ?? 0) ? (int) $values[$key] : -1;
         }
-        foreach (['repository', 'encryption', 'ssh_command', 'archive_name', 'archive_prefix', 'compression', 'schedule_minute', 'schedule_hour'] as $key) {
+        foreach ([
+            'repository',
+            'encryption',
+            'ssh_command',
+            'archive_name',
+            'archive_prefix',
+            'compression',
+            'schedule_minute',
+            'schedule_hour',
+            'admin_backups_dir',
+        ] as $key) {
             $values[$key] = trim((string) ($values[$key] ?? ''));
         }
 

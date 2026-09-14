@@ -36,6 +36,8 @@ final class Configuration
         'schedule_minute'      => '30',
         'schedule_hour'        => '3',
         'run_after_da_backups' => false,
+        'admin_backups_dir'    => '/home/admin/admin_backups',
+        'restore_admin_backup' => true,
         'user_restore_enabled' => true,
         'user_restore_dir'     => 'borg_restore',
     ];
@@ -173,6 +175,41 @@ final class Configuration
     public function runAfterDaBackups(): bool
     {
         return (bool) $this->get('run_after_da_backups');
+    }
+
+    /**
+     * Where DirectAdmin writes its own per-user backups.
+     *
+     * These hold everything that is not in the home directory — the user's
+     * DirectAdmin configuration and database dumps — so a home-directory
+     * restore on its own gives back the files but not the account.
+     */
+    public function adminBackupsDir(): string
+    {
+        return rtrim((string) $this->get('admin_backups_dir'), '/');
+    }
+
+    public function restoreAdminBackup(): bool
+    {
+        return (bool) $this->get('restore_admin_backup');
+    }
+
+    /**
+     * Whether $path would actually end up in an archive, i.e. whether it is at
+     * or below one of the configured source paths.
+     *
+     * Used to warn when the admin backups directory is not being backed up,
+     * which would make the restore-a-user flow quietly incomplete.
+     */
+    public function covers(string $path): bool
+    {
+        foreach ($this->sourcePaths() as $source) {
+            if ($path === $source || str_starts_with($path . '/', rtrim($source, '/') . '/')) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function userRestoreEnabled(): bool

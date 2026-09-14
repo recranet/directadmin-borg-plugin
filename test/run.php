@@ -431,6 +431,114 @@ $pruneJob = $plugin->jobs()->find($pruneJob->id);
 $t->is($exit, 0, 'the prune job exits cleanly');
 $t->is($pruneJob->status(), Job::STATUS_SUCCESS, 'prune succeeds: ' . $pruneJob->message());
 
+// ====================================================== DirectAdmin backups
+
+$t->group('Admin backups configuration');
+
+$t->is($plugin->config()->load()->adminBackupsDir(), '/home/admin/admin_backups', 'defaults to DirectAdmin\'s own location');
+$t->notEmpty($plugin->config()->save(['admin_backups_dir' => 'relative/path']), 'rejects a relative admin backups path');
+$t->notEmpty($plugin->config()->save(['admin_backups_dir' => '']), 'rejects an empty admin backups path');
+$t->notEmpty($plugin->config()->save(['admin_backups_dir' => "/home/admin\nrm -rf /"]), 'rejects a newline in the path');
+$t->isEmpty($plugin->config()->save(['admin_backups_dir' => '/home/admin/admin_backups/']), 'accepts an absolute path');
+$t->is($plugin->config()->load()->adminBackupsDir(), '/home/admin/admin_backups', 'a trailing slash is normalised away');
+
+$t->ok($plugin->config()->load()->covers('/home/admin/admin_backups'), 'coverage check sees the path inside /home');
+$plugin->config()->save(['source_paths' => '/etc']);
+$t->notOk($plugin->config()->load()->covers('/home/admin/admin_backups'), 'coverage check spots an uncovered path');
+$t->notOk($plugin->config()->load()->covers('/home2'), 'coverage is not fooled by a shared prefix');
+$plugin->config()->save(['source_paths' => "/home\n/etc/passwd"]);
+
+$t->group('Finding a user\'s DirectAdmin backup in an archive');
+
+$adminDir = $plugin->config()->load()->adminBackupsDir();
+
+$aliceBackup = $plugin->repository()->findAdminBackup($archive, $adminDir, 'alice');
+$t->ok($aliceBackup !== null, 'finds a .tar.zst backup');
+$t->is($aliceBackup?->path, '/home/admin/admin_backups/alice.tar.zst', 'returns the full archive path');
+
+$bobBackup = $plugin->repository()->findAdminBackup($archive, $adminDir, 'bob');
+$t->ok($bobBackup !== null, 'finds a .tar.gz backup');
+$t->is($bobBackup?->path, '/home/admin/admin_backups/bob.tar.gz', 'matches whichever compression was used');
+
+$t->ok($plugin->repository()->findAdminBackup($archive, $adminDir, 'nobody') === null, 'returns nothing for an unknown user');
+$t->ok($plugin->repository()->findAdminBackup($archive, '/home/admin/wrong', 'alice') === null, 'returns nothing when the directory is wrong');
+// A username must not be able to reach a neighbouring file by partial match.
+$t->ok($plugin->repository()->findAdminBackup($archive, $adminDir, 'alic') === null, 'does not match on a partial username');
+
+$t->group('Restoring a whole user');
+
+$restoreUser = static function (string $username, string $destination = '/home/admin/borg_restore') use ($t, $archive, $plugin) {
+    return $t->page('admin', 'admin', ['tab' => 'archives', 'archive' => $archive], [
+        'action'      => 'restore_user',
+        'archive'     => $archive,
+        'username'    => $username,
+        'destination' => $destination,
+        'csrf_token'  => (new CsrfTokenizer($plugin->paths, $plugin->filesystem()))->token(PluginRequest::LEVEL_ADMIN, 'admin'),
+    ], 'POST');
+};
+
+$out = $restoreUser('alice');
+$t->contains($out, 'Restoring alice', 'a restore-a-user run starts for an existing account');
+$t->contains($out, 'alice.tar.zst', 'the DirectAdmin backup is included alongside the home directory');
+
+$latest = $plugin->jobs()->recent(1)[0];
+$t->is($latest->type(), Job::TYPE_RESTORE, 'it queues a restore job');
+$t->is($latest->params()['paths'], ['/home/alice', '/home/admin/admin_backups/alice.tar.zst'], 'the job restores both the home and the DirectAdmin backup');
+$t->is($latest->params()['restore_user'] ?? null, 'alice', 'the job records which user it is for');
+
+$t->ok($t->waitForJob($plugin, $latest->id, 180)?->status() === Job::STATUS_SUCCESS, 'the user restore completes');
+$t->ok(is_file('/home/admin/borg_restore/home/admin/admin_backups/alice.tar.zst'), 'the DirectAdmin backup lands on disk');
+$t->ok(is_dir('/home/admin/borg_restore/home/alice/domains'), 'the home directory lands on disk');
+
+$t->group('Restoring a user DirectAdmin does not have');
+
+$out = $restoreUser('ghost');
+$t->contains($out, 'Create the user in DirectAdmin first', 'a missing account is a prompt, not a guess');
+$t->contains($out, 'Restore Backups', 'the prompt names the DirectAdmin screen that recreates it');
+$t->notContains($out, 'Restoring ghost', 'no home-directory restore is started for a missing account');
+$t->notOk(is_dir('/home/admin/borg_restore/home/ghost'), 'nothing was restored into a home for a non-existent account');
+$t->contains($out, 'Restore only ghost', 'the admin-backup-only action is offered');
+
+// That action is explicit: it only happens when the operator asks for it.
+$out = $t->page('admin', 'admin', ['tab' => 'archives', 'archive' => $archive], [
+    'action'      => 'restore_admin_backup',
+    'archive'     => $archive,
+    'username'    => 'ghost',
+    'destination' => '/home/admin/borg_restore',
+    'csrf_token'  => (new CsrfTokenizer($plugin->paths, $plugin->filesystem()))->token(PluginRequest::LEVEL_ADMIN, 'admin'),
+], 'POST');
+$t->contains($out, 'ghost.tar.gz', 'the DirectAdmin backup alone can be restored');
+$t->contains($out, 'Restore Backups', 'the next step is spelled out');
+
+$ghostJob = $plugin->jobs()->recent(1)[0];
+$t->is($ghostJob->params()['paths'], ['/home/admin/admin_backups/ghost.tar.gz'], 'only the tarball is restored, not a home directory');
+$t->ok($t->waitForJob($plugin, $ghostJob->id, 180)?->status() === Job::STATUS_SUCCESS, 'the tarball restore completes');
+$t->ok(is_file('/home/admin/borg_restore/home/admin/admin_backups/ghost.tar.gz'), 'the tarball lands on disk');
+$t->notOk(is_dir('/home/admin/borg_restore/home/ghost'), 'still no home directory for the missing account');
+
+$t->group('Restore-a-user guards');
+
+$t->contains($restoreUser('alice', '/'), 'Refusing to restore directly into', 'protected destinations still apply');
+$t->contains($restoreUser(''), 'Choose an archive and a username', 'a blank username is rejected');
+$t->contains($restoreUser('../../etc'), 'Invalid account name', 'a traversal attempt in the username is rejected');
+
+// A user with no DirectAdmin backup in this archive still gets their home back,
+// with a warning that the databases are not included.
+$out = $restoreUser('admin');
+$t->contains($out, 'No DirectAdmin backup for &quot;admin&quot;', 'a missing tarball is called out (and the username is escaped)');
+$t->contains($out, 'Databases and account configuration', 'the warning says what is missing');
+
+$t->group('User level cannot reach admin backups');
+
+$t->notContains($t->page('user', 'alice', ['archive' => $archive, 'path' => '/home/admin/admin_backups']), 'alice.tar.zst', 'a customer cannot browse the admin backups');
+$out = $t->page('user', 'alice', [], [
+    'action'     => 'restore',
+    'archive'    => $archive,
+    'paths'      => ['/home/admin/admin_backups/alice.tar.zst'],
+    'csrf_token' => (new CsrfTokenizer($plugin->paths, $plugin->filesystem()))->token(PluginRequest::LEVEL_USER, 'alice'),
+], 'POST');
+$t->contains($out, 'outside the permitted directory', 'a customer cannot restore their own admin backup');
+
 $t->group('Archive name collisions');
 
 // A realistic misconfiguration: a daily template plus a second run the same
@@ -496,10 +604,31 @@ $t->contains($t->console(['list'])['stdout'], 'borg:status', 'commands are regis
 $t->contains($t->console(['borg:status'])['stdout'], 'DirectAdmin Borg plugin', 'borg:status runs');
 $t->contains($t->console(['borg:status'])['stdout'], '/backup/test-repo', 'borg:status reports the repository');
 $t->is($t->console(['borg:job', 'not-a-job-id'])['exit'], 2, 'borg:job rejects a malformed id');
+// Second-resolution ids would order arbitrarily within a second, and the job
+// list is ordered by filename.
+$t->is($t->console(['borg:job', '20260101-120000-backup-aabbccdd'])['exit'], 2, 'borg:job rejects the old second-resolution id format');
 
 $queued = $plugin->jobs()->create(Job::TYPE_BACKUP, 'test', ['prune' => false]);
 $plugin->jobs()->update($queued, ['status' => Job::STATUS_SUCCESS]);
 $t->is($t->console(['borg:job', $queued->id])['exit'], 2, 'borg:job refuses to re-run a finished job');
+
+$t->group('Job ordering');
+
+$ordering = [];
+for ($i = 0; $i < 5; $i++) {
+    $ordering[] = $plugin->jobs()->create(Job::TYPE_CHECK, 'ordering-test', [])->id;
+}
+$t->ok(\count(array_unique($ordering)) === 5, 'ids created in a tight loop are unique');
+
+$sorted = $ordering;
+rsort($sorted, SORT_STRING);
+$t->is($sorted, array_reverse($ordering), 'ids sort by creation order even within the same second');
+
+$listed = array_map(
+    static fn (Job $job) => $job->id,
+    $plugin->jobs()->recent(5, 'ordering-test')
+);
+$t->is($listed, array_reverse($ordering), 'the job list returns newest first, in true creation order');
 
 $t->group('Detached dispatch');
 

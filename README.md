@@ -132,11 +132,11 @@ make package      # -> dist/borg-1.0.0.tar.gz
 /usr/local/directadmin/data/users
 ```
 
-Databases are **not** dumped by this plugin. DirectAdmin writes database dumps
-into `/home/<user>/backups/` during its own backup run, so the reliable way to
-capture them is to enable **“Also run after DirectAdmin's own backups finish”**,
-which triggers a borg archive from the `all_backups_post` hook once those files
-exist.
+Databases are **not** dumped by this plugin. DirectAdmin dumps them into its own
+per-user backups under `/home/admin/admin_backups/`, which `/home` already
+covers — but only if a DirectAdmin backup run has actually happened. Enable
+**“Also run after DirectAdmin's own backups finish”** so a borg archive is taken
+once those files exist, and the two stay in step.
 
 ### Retention
 
@@ -160,6 +160,42 @@ their full original path, so `/home/alice/x` lands at
 into `/home/<user>/borg_restore/`, chowned back to them. Their live files are
 never touched. Turn the whole feature off with **User restores → Let users
 restore their own files**.
+
+### Restoring a whole user
+
+A home directory is only half an account. DirectAdmin keeps the rest — the
+account's configuration and its database dumps — in its own per-user backup
+under `/home/admin/admin_backups/<username>.tar.zst` (or `.tar.gz`, `.tar.bz2`,
+`.tar`, depending on the compression configured when it ran).
+
+Open an archive and use **Restore a whole user**: give a username, and the
+plugin restores their home directory *and* that tarball together. The location
+is configurable under **Backup → DirectAdmin backups**, and the plugin warns if
+it is not covered by your source paths — otherwise the archives would look fine
+while being unable to restore an account.
+
+Because the tarballs live under `/home/admin`, they are admin-only. A customer's
+self-service restore cannot see or fetch them.
+
+#### If the account no longer exists
+
+**This plugin never creates accounts.** If you name a user DirectAdmin does not
+have, the home-directory restore is refused rather than guessed at — restoring
+files into a home for an account that does not exist leaves orphaned data with
+no owner.
+
+Instead you are prompted, because the order matters and it is not obvious:
+
+1. Restore **only** the DirectAdmin backup — an explicit button that appears at
+   that point, so nothing happens on your behalf.
+2. Recreate the account from that tarball with **Admin Level → Restore
+   Backups**. This is what actually creates the user, with its databases and
+   configuration.
+3. Come back here and restore the home directory.
+
+If the account exists but has no tarball in that archive, the home directory is
+still restored and you are told plainly that the databases and configuration are
+not included.
 
 ---
 
@@ -256,7 +292,7 @@ make test
 Builds a container pinned to **PHP 8.1** (matching the native CLI on the target
 servers, so 8.2+ syntax cannot sneak in) with a real borg and a `/home`
 containing two customer accounts at DirectAdmin's `0711` permissions. It then
-installs the plugin with the production `install.sh` and runs 175 checks,
+installs the plugin with the production `install.sh` and runs 226 checks,
 driving the real entry points the way DirectAdmin does — environment in, stdout
 out.
 
@@ -265,8 +301,9 @@ No DirectAdmin server is involved, and nothing outside the container is touched.
 The suite covers path confinement and traversal, cross-account access through
 both the page and the worker, CSRF, the DirectAdmin env-decoding path, template
 escaping, repository locking, cron file generation, prune scoping, detached
-dispatch, secret handling and file permissions — and ends with the privilege
-probe that produced the table at the top of this file.
+dispatch, secret handling and file permissions — including the restore-a-user
+flow and its refusal to touch a home directory for an account DirectAdmin does
+not have — and ends with the privilege probe that produced the table above.
 
 ---
 

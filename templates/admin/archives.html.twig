@@ -5,6 +5,73 @@
         </p>
     </div>
 {% elseif browser %}
+    {% if user_restore %}
+        <div class="borg-card">
+            <h2>Restore a whole user</h2>
+
+            <p class="borg-note" style="margin-top:0">
+                Restores the account's home directory together with its DirectAdmin backup
+                from <span class="borg-mono">{{ user_restore.admin_backups_dir }}</span>,
+                which holds the databases and account configuration.
+            </p>
+
+            {% if not user_restore.covered %}
+                <div class="borg-alert borg-alert-warn">
+                    <span class="borg-mono">{{ user_restore.admin_backups_dir }}</span> is not in your
+                    source paths, so this archive has no DirectAdmin backups to restore.
+                </div>
+            {% endif %}
+
+            <form method="post" action="{{ url({ tab: 'archives', archive: user_restore.archive }) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="action" value="restore_user">
+                <input type="hidden" name="archive" value="{{ user_restore.archive }}">
+
+                <div class="borg-inline">
+                    <div class="borg-field">
+                        <label for="borg-username">Username</label>
+                        <input type="text" id="borg-username" name="username" value="{{ user_restore.username }}"
+                               style="max-width:220px" autocapitalize="off" autocorrect="off" spellcheck="false">
+                    </div>
+                    <div class="borg-field" style="flex:1;min-width:260px">
+                        <label for="borg-user-destination">Restore into</label>
+                        <input type="text" id="borg-user-destination" name="destination"
+                               value="{{ user_restore.default_destination }}">
+                    </div>
+                </div>
+
+                <div class="borg-actions">
+                    <button class="borg-btn borg-btn-primary" type="submit">Restore user</button>
+                </div>
+            </form>
+
+            {% if user_restore.missing_account %}
+                {# The account is gone, so its home cannot be restored yet. The
+                   DirectAdmin backup is what recreates it, so offer just that,
+                   as an explicit choice rather than something done for them. #}
+                <form method="post" action="{{ url({ tab: 'archives', archive: user_restore.archive }) }}"
+                      style="margin-top:12px">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="action" value="restore_admin_backup">
+                    <input type="hidden" name="archive" value="{{ user_restore.archive }}">
+                    <input type="hidden" name="username" value="{{ user_restore.missing_account }}">
+                    <input type="hidden" name="destination" value="{{ user_restore.default_destination }}">
+
+                    <p class="borg-note" style="margin-top:0">
+                        This plugin does not create accounts. To bring
+                        <span class="borg-mono">{{ user_restore.missing_account }}</span> back:
+                        restore its DirectAdmin backup, recreate the account with
+                        <strong>Admin Level &rarr; Restore Backups</strong>, then restore the home directory here.
+                    </p>
+
+                    <button class="borg-btn" type="submit">
+                        Restore only {{ user_restore.missing_account }}'s DirectAdmin backup
+                    </button>
+                </form>
+            {% endif %}
+        </div>
+    {% endif %}
+
     <div class="borg-card">
         <h2>{{ browser.archive }}</h2>
 
