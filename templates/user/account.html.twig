@@ -1,0 +1,113 @@
+{# The account panel, User Level: the same two restores Admin Level offers, for
+   whoever is logged in. No account to pick, and no destination to choose --
+   files go back exactly where they came from. #}
+<div class="borg-card">
+    <h2>
+        {% include 'partial/calendar_icon.html.twig' %}
+        {{ panel.taken_at|date_only }}
+    </h2>
+
+    {% if panel.missing %}
+        <p class="borg-empty">This backup is not available.</p>
+        <a class="borg-btn" href="{{ url({}) }}">Back to backups</a>
+    {% else %}
+        <p class="borg-note" style="margin-top:0">
+            Your files as they were on this date, put back in
+            <span class="borg-mono">{{ panel.home }}</span>. A file of the same name is
+            <strong>replaced with the older version</strong> and the current one is not kept.
+            Anything you have created since is left alone.
+        </p>
+    {% endif %}
+</div>
+
+{% if not panel.missing %}
+    {# ------------------------------------------------------------- domains #}
+    <div class="borg-card">
+        <h2>Restore Domains</h2>
+
+        {% if not panel.has_domains %}
+            <p class="borg-empty">
+                <span class="borg-mono">{{ panel.domains_path }}</span> is not in this backup.
+            </p>
+        {% else %}
+            <p class="borg-note" style="margin-top:0">
+                Your websites, as they were on this date, back into
+                <span class="borg-mono">{{ panel.domains_path }}</span>. Use this when the site is
+                broken or a file has been changed by mistake.
+            </p>
+
+            <form method="post" action="{{ url({}) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="action" value="restore_domains">
+                <input type="hidden" name="archive" value="{{ panel.archive }}">
+
+                <div class="borg-field">
+                    <label>
+                        <input type="checkbox" name="confirm" value="1">
+                        Replace what is in <span class="borg-mono">{{ panel.domains_path }}</span> now
+                    </label>
+                    <span class="borg-hint">
+                        There is no undo, and no copy of the current files is kept.
+                    </span>
+                </div>
+
+                <div class="borg-actions">
+                    <button class="borg-btn borg-btn-primary" type="submit">Restore Domains</button>
+                </div>
+            </form>
+        {% endif %}
+    </div>
+
+    {# --------------------------------------------------------------- email #}
+    <div class="borg-card">
+        <h2>Restore Email</h2>
+
+        {% if not panel.has_email %}
+            <p class="borg-empty">
+                <span class="borg-mono">{{ panel.email_path }}</span> is not in this backup.
+            </p>
+        {% else %}
+            <p class="borg-note" style="margin-top:0">
+                Your mailboxes, as they were on this date, back into
+                <span class="borg-mono">{{ panel.email_path }}</span>. Mail that has arrived since
+                is left where it is, so this adds messages back rather than replacing your mailbox.
+                Your mail program may re-download messages afterwards.
+            </p>
+
+            <form method="post" action="{{ url({}) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="action" value="restore_email">
+                <input type="hidden" name="archive" value="{{ panel.archive }}">
+
+                <div class="borg-field">
+                    <label>
+                        <input type="checkbox" name="confirm" value="1">
+                        Put the mail from this backup back into
+                        <span class="borg-mono">{{ panel.email_path }}</span>
+                    </label>
+                    <span class="borg-hint">
+                        Messages you deleted after this date come back, and there is no undo.
+                    </span>
+                </div>
+
+                <div class="borg-actions">
+                    <button class="borg-btn borg-btn-primary" type="submit">Restore Email</button>
+                </div>
+            </form>
+        {% endif %}
+    </div>
+
+    {# ----------------------------------------------------------- the files #}
+    <div class="borg-card">
+        <h2>Browse files</h2>
+        <p class="borg-note" style="margin-top:0">
+            For anything the buttons above do not cover &mdash; one file you deleted, say.
+        </p>
+        <div class="borg-actions">
+            <a class="borg-btn" href="{{ url({ archive: panel.archive, path: panel.home }) }}">
+                Browse {{ panel.home }}
+            </a>
+            <a class="borg-btn" href="{{ url({}) }}">Back to backups</a>
+        </div>
+    </div>
+{% endif %}

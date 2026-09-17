@@ -566,6 +566,105 @@ $t->notContains($out, 'passwd', 'browsing /etc is impossible at user level');
 $out = $t->page('user', 'alice', ['archive' => 'no-such-archive']);
 $t->contains($out, 'Unknown archive', 'an unknown archive name is rejected');
 
+$t->group('An account panel at User Level too');
+
+// The customer gets the same shape the admin gets, minus the account picker:
+// pick a date, then Restore Domains / Restore Email / Browse files. Before
+// this, "my site is broken" meant knowing it lived in `domains` and ticking
+// the directory by hand.
+
+$userPanel = $t->page('user', 'alice', ['archive' => $archive]);
+$t->contains($userPanel, 'Restore Domains', 'Domains is offered to the customer');
+$t->contains($userPanel, 'Restore Email', 'so is Email');
+$t->contains($userPanel, '/home/alice/domains', 'it names the exact path it writes back to');
+$t->contains($userPanel, '/home/alice/imap', 'and the same for mail');
+$t->contains($userPanel, 'Browse files', 'the file browser is still reachable underneath');
+$t->notContains($userPanel, 'name="destination"', 'there is no destination to choose');
+
+// The pre-clean is the malware-cleanup path: irreversible, and it takes
+// everything the archive does not contain with it. Admin-only, deliberately.
+$t->notContains($userPanel, 'name="clean_first"', 'a customer is not offered the pre-clean');
+$t->notContains($userPanel, 'name="clean_confirm"', 'nor the confirmation that goes with it');
+$t->notContains($userPanel, 'name="username"', 'and cannot name an account: it is always their own');
+$t->notContains($userPanel, '/home/bob', 'no other account appears on the panel');
+
+// The list of dates opens the panel, not the browser.
+$t->contains($t->page('user', 'alice'), 'archive=' . rawurlencode($archive) . '"', 'the date list links to the panel, with no path');
+
+$t->group('A customer restoring a whole directory');
+
+$userTreeToken = static fn () => (new CsrfTokenizer($plugin->paths, $plugin->filesystem()))
+    ->token(PluginRequest::LEVEL_USER, 'alice');
+
+$restoreTree = static function (string $action, array $extra = []) use ($t, $archive, $userTreeToken) {
+    return $t->page('user', 'alice', [], array_merge([
+        'action'     => $action,
+        'archive'    => $archive,
+        'csrf_token' => $userTreeToken(),
+    ], $extra), 'POST');
+};
+
+// An admin got here by typing a username; a customer got here by clicking one
+// large button, so the tick is the moment they say the current files can go.
+$out = $restoreTree('restore_domains');
+$t->contains($out, 'Tick the box to confirm', 'a restore without the tick is refused');
+$t->notContains($out, 'Restoring your website files', 'and no job is started');
+
+@file_put_contents('/home/alice/domains/example.com/public_html/index.html', '<h1>customer broke it</h1>');
+@file_put_contents('/home/alice/domains/added-by-the-customer.txt', 'newer than the archive');
+
+$out = $restoreTree('restore_domains', ['confirm' => '1']);
+$t->contains($out, 'Restoring your website files', 'ticking it starts the restore');
+$t->contains($out, '/home/alice/domains', 'the message names where the files go');
+
+$treeJob = $plugin->jobs()->recent(1)[0];
+$t->is($treeJob->owner(), 'alice', 'the job belongs to the customer, so they can watch it');
+$t->is($treeJob->params()['paths'], ['/home/alice/domains'], 'it restores exactly that directory');
+$t->is($treeJob->params()['destination'], '/', 'in place, so the files go back where they came from');
+$t->is($treeJob->params()['in_place'] ?? null, true, 'the job records that');
+$t->is($treeJob->params()['confine_to'] ?? null, 'alice', 'and carries the home the worker re-checks against');
+$t->ok(!isset($treeJob->params()['clean_paths']), 'nothing is deleted first');
+$t->is($treeJob->params()['trigger'] ?? null, 'user', 'it is recorded as a customer restore');
+
+$t->ok($t->waitForJob($plugin, $treeJob->id, 180)?->status() === Job::STATUS_SUCCESS, 'the restore completes');
+$t->is(
+    trim((string) @file_get_contents('/home/alice/domains/example.com/public_html/index.html')),
+    '<h1>alice site</h1>',
+    'the live site is put back'
+);
+$t->ok(is_file('/home/alice/domains/added-by-the-customer.txt'), 'a file added since the backup survives: a restore is an overlay');
+$t->is((int) stat('/home/alice/domains')['uid'], $aliceUid, 'the restored tree still belongs to the account');
+
+$out = $restoreTree('restore_email', ['confirm' => '1']);
+$t->contains($out, 'Restoring your mailboxes', 'Email restores too');
+$t->contains($out, 're-download', 'and warns that a mail program may re-sync');
+$t->is($plugin->jobs()->recent(1)[0]->params()['paths'], ['/home/alice/imap'], 'it restores the imap directory');
+
+$t->group('A customer cannot restore another account\'s directory');
+
+// The username is never taken from the request at user level -- it is whoever
+// DirectAdmin says is logged in -- so there is nothing to point elsewhere.
+$out = $restoreTree('restore_domains', ['confirm' => '1', 'username' => 'bob']);
+$t->contains($out, '/home/alice/domains', 'a username in the body is ignored');
+$t->notContains($out, '/home/bob', 'and cannot reach another account');
+$t->is($plugin->jobs()->recent(1)[0]->params()['paths'], ['/home/alice/domains'], 'the job still restores their own directory');
+
+$t->is(
+    trim((string) @file_get_contents('/home/bob/secret.txt')),
+    'bob private data',
+    'bob\'s files are untouched'
+);
+
+$out = $restoreTree('restore_domains', ['confirm' => '1', 'archive' => 'no-such-archive']);
+$t->contains($out, 'Unknown archive', 'an unknown archive is rejected here too');
+
+$out = $t->page('user', 'alice', [], [
+    'action'  => 'restore_domains',
+    'archive' => $archive,
+    'confirm' => '1',
+], 'POST');
+$t->contains($out, 'Security token', 'and a POST without a CSRF token is rejected');
+
 $t->group('User restore requests');
 
 $out = $t->page('user', 'alice', [], [
@@ -684,6 +783,40 @@ $overview = $t->page('admin');
 $t->contains($overview, 'Newest archive', 'the overview reports the newest archive it found');
 $t->notContains($overview, 'Back up now', 'the overview offers no way to start a backup');
 $t->notContains($overview, 'Prune', 'the overview offers no way to prune');
+
+$t->group('Admin restores a whole directory');
+
+// Both levels now go through the same code, so the admin side is exercised
+// end to end as well -- not just rendered.
+$adminTree = static function (string $action, array $extra = []) use ($t, $archive, $plugin) {
+    return $t->page('admin', 'admin', ['tab' => 'archives', 'archive' => $archive, 'user' => 'alice'], array_merge([
+        'action'     => $action,
+        'archive'    => $archive,
+        'username'   => 'alice',
+        'csrf_token' => (new CsrfTokenizer($plugin->paths, $plugin->filesystem()))->token(PluginRequest::LEVEL_ADMIN, 'admin'),
+    ], $extra), 'POST');
+};
+
+$out = $adminTree('restore_domains');
+$t->contains($out, 'Restoring Domains for alice', 'the admin button starts the restore');
+
+$adminTreeJob = $plugin->jobs()->recent(1)[0];
+$t->is($adminTreeJob->owner(), 'admin', 'the job belongs to the administrator who started it, not to the account');
+$t->is($adminTreeJob->params()['paths'], ['/home/alice/domains'], 'it restores that account\'s domains');
+$t->is($adminTreeJob->params()['confine_to'] ?? null, 'alice', 'bounded by the account it is for, re-checked in the worker');
+$t->is($adminTreeJob->params()['trigger'] ?? null, 'manual', 'and is recorded as an admin restore, not a customer one');
+$t->ok($t->waitForJob($plugin, $adminTreeJob->id, 180)?->status() === Job::STATUS_SUCCESS, 'it completes');
+
+$out = $adminTree('restore_email');
+$t->contains($out, 'Restoring Email for alice', 'so does Email');
+$t->is($plugin->jobs()->recent(1)[0]->params()['paths'], ['/home/alice/imap'], 'it restores the imap directory');
+
+// The pre-clean stays here and nowhere else, and still needs the username back.
+$t->contains(
+    $adminTree('restore_domains', ['clean_first' => '1', 'clean_confirm' => 'wrong']),
+    'to confirm deleting',
+    'the pre-clean still needs the username typed'
+);
 
 $t->group('Admin restore guards');
 

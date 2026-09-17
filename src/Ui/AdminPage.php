@@ -11,6 +11,7 @@ use Recranet\DirectAdminBorg\Borg\Repository;
 use Recranet\DirectAdminBorg\Config\Configuration;
 use Recranet\DirectAdminBorg\Exception\BorgPluginException;
 use Recranet\DirectAdminBorg\Http\PluginRequest;
+use Recranet\DirectAdminBorg\Job\AccountTreeRestore;
 use Recranet\DirectAdminBorg\Job\Job;
 use Recranet\DirectAdminBorg\Plugin;
 use Recranet\DirectAdminBorg\Security\Account;
@@ -361,15 +362,10 @@ final class AdminPage
     /**
      * Restore one of an account's two directories back over itself.
      *
-     * These are the two requests that actually come in -- "the site is broken"
-     * and "the mail is gone" -- so they are one button each rather than a path
-     * to be typed. There is no destination field on purpose: restoring
-     * /home/alice/domains anywhere but /home/alice/domains produces a copy
-     * nobody asked for, which then has to be moved by hand with the right
-     * ownership. In place is the only answer that finishes the job.
-     *
-     * The subtree is still validated against the account's home before the job
-     * is queued, so "in place" cannot be talked into meaning somewhere else.
+     * The restore itself lives in AccountTreeRestore, because User Level offers
+     * the same two buttons for the account making the request. What stays here
+     * is the part only an administrator gets: naming somebody else's account,
+     * and deleting the directory before extracting.
      */
     private function restoreAccountTree(string $subdirectory): void
     {
@@ -396,8 +392,8 @@ final class AdminPage
             return;
         }
 
-        $target = $account->home . '/' . $subdirectory;
-        $label = $subdirectory === 'imap' ? 'Email' : 'Domains';
+        $target = AccountTreeRestore::path($account, $subdirectory);
+        $label = AccountTreeRestore::label($subdirectory);
 
         // Deleting first is the malware case: a restore only adds and
         // overwrites, so a webshell dropped since the backup would survive one.
@@ -417,14 +413,13 @@ final class AdminPage
             $cleanPaths[] = $this->assertCleanable($target, $account->home);
         }
 
-        $this->queueRestore(
+        (new AccountTreeRestore($this->plugin))->queue(
             $archive,
-            [$target],
-            '/',
-            $username,
-            [$account->home],
-            $cleanPaths,
-            $account->home
+            $account,
+            $subdirectory,
+            $this->request->username,
+            'manual',
+            $cleanPaths
         );
 
         $this->flash->success(\sprintf(

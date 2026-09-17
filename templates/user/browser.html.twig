@@ -21,6 +21,9 @@
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <input type="hidden" name="action" value="restore">
                 <input type="hidden" name="archive" value="{{ browser.archive }}">
+                {# Posted back so a restore returns to the folder it was started
+                   in rather than to the account panel. #}
+                <input type="hidden" name="path" value="{{ browser.path }}">
 
                 <div class="borg-scroll">
                     <table class="borg-table">
@@ -55,6 +58,7 @@
 
                 <div class="borg-actions">
                     <button class="borg-btn borg-btn-primary" type="submit">Restore selected</button>
+                    <a class="borg-btn" href="{{ url({ archive: browser.archive }) }}">Back</a>
                     <a class="borg-btn" href="{{ url({}) }}">Back to backups</a>
                 </div>
             </form>

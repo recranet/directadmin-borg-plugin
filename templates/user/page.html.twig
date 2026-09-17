@@ -21,6 +21,8 @@
     {% else %}
         {% if browser %}
             {% include 'user/browser.html.twig' %}
+        {% elseif panel %}
+            {% include 'user/account.html.twig' %}
         {% else %}
             {% include 'user/archives.html.twig' %}
         {% endif %}

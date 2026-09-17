@@ -286,13 +286,36 @@ one. It is never implied — you tick it and type the username.
 and account configuration. **Browse files** is still there underneath, scoped to
 that account, for the one file a customer deleted.
 
-**Users**, at User Level, browse their own home directory at a chosen backup date
-and restore in place too, back over their own live files — a file of the same
-name is replaced with the older version and the current one is not kept, which
-the page says plainly rather than in a hint. Confinement to their own home is
-the only thing bounding that, so it is enforced twice: once in the page and
-again in the worker, at the point of use. Turn the feature off with
-**Repository → Let users restore their own files**.
+**Users**, at User Level, get the same screen with the account picker removed —
+the account is not a choice there, it is whoever is logged in. Pick a date,
+then **Restore Domains**, **Restore Email**, or browse for anything else. A
+customer should not have to know that "my site is broken" means `domains` and
+"my mail is gone" means `imap`; that translation is exactly what the admin
+screen does, and there is no reason the person who actually has the problem
+gets less of it. Both levels run the same code
+(`src/Job/AccountTreeRestore.php`), because the boundary a customer restore
+depends on is the boundary an admin restore uses, and two copies of it would be
+two things to keep right.
+
+Two things the customer's version does not inherit:
+
+- **No pre-clean.** Deleting the directory before extracting is the malware
+  path — irreversible, and it takes everything the archive does not contain
+  with it. That stays a decision for whoever is handling the incident.
+- **It asks for a tick.** An administrator restoring in place typed a username
+  to get there. A customer clicked one large button and may not have read the
+  warning beside it, so the tick is the moment they say the current files can
+  go.
+
+Restores in place are still enforced twice — once in the page and again in the
+worker against the resolved account, at the point of use. Turn the whole
+user-level feature off with **Repository → Let users restore their own files**.
+
+Restoring `imap` writes maildirs back underneath a running dovecot, at either
+level. It is an overlay, so mail that arrived since stays and deleted messages
+come back; what the page warns about is that a mail client may re-download
+afterwards. Whether dovecot's indexes want rebuilding after a restore is not
+something this plugin decides — it does not touch them.
 
 Ownership is deliberately not touched for an in-place restore. An extract run as
 root puts back the ownership recorded in the archive, which is already correct,
@@ -483,7 +506,8 @@ src/
                          the archive index and archive-name parsing
   Config/                configuration, validation constraints
   Http/                  DirectAdmin request decoding, JSON status endpoint
-  Job/                   job records, dispatch, execution (restore and check)
+  Job/                   job records, dispatch, execution (restore and check),
+                         and the restores both access levels share
   Security/              path confinement, account resolution, CSRF
   Ui/                    page controllers
 templates/               Twig templates (auto-escaped)
@@ -661,6 +685,11 @@ real environment:
   refused when `/home/<user>/backups` has been replaced with a symlink to
   `/etc`, when a job file names a directory outside the account's home, or when
   it asks to deliver more than one path
+- the account panel at both levels, end to end: that the admin and customer
+  buttons queue the same job for the same directory, owned by whoever started
+  it; that a customer's restore is refused without the tick; that a username
+  posted into a user-level restore is ignored rather than honoured; and that
+  the pre-clean is offered at Admin Level only
 - job retention, oversized directory listings, and log tailing past 64 KB
 
 ---
