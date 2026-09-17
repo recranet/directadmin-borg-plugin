@@ -171,16 +171,32 @@ final class JobRunner
             return $this->finish($job, Job::STATUS_FAILED, 2, 'Restore job is missing an archive, paths or destination.');
         }
 
+        $inPlace = (bool) ($params['in_place'] ?? false);
+
+        // Whose home bounds this restore. Normally the account that owns the
+        // files; chown_to is the older spelling and still honoured, because it
+        // is what a job queued by a previous version carries.
+        $confineTo = (string) ($params['confine_to'] ?? '') ?: $owner;
+
         // Re-validate rather than trusting the job file. The worker runs as
         // root and the job file is its only input, so the confinement check
         // that the UI already made is repeated here at the point of use.
         $account = null;
-        if ($owner !== '') {
-            $account = Account::resolve($owner, $this->plugin->paths);
-            $destination = $account->confine($destination);
+        if ($confineTo !== '') {
+            $account = Account::resolve($confineTo, $this->plugin->paths);
             foreach ($paths as $path) {
                 $account->confine($path);
             }
+        }
+
+        if ($inPlace) {
+            // borg strips the leading slash and writes each member back to its
+            // own absolute path, so "/" is what "in place" means. It is
+            // deliberately not confined to the home: the paths are, and they
+            // are what decide where anything lands.
+            $destination = '/';
+        } elseif ($account !== null) {
+            $destination = $account->confine($destination);
         } else {
             $destination = PathGuard::normalize($destination);
         }
@@ -242,7 +258,21 @@ final class JobRunner
             return $this->finish($job, Job::STATUS_FAILED, $result->exitCode, 'Restore failed: ' . $result->errorMessage());
         }
 
-        if ($account !== null) {
+        // Ownership. Only for a staged restore, and never in place: an extract
+        // run as root already puts back the ownership recorded in the archive,
+        // which is the correct one. Chowning in place would mean chowning the
+        // destination -- which is "/" -- and handing the entire filesystem to
+        // a customer. The destination is checked again here rather than relying
+        // on the branch above having got it right.
+        if ($account !== null && $owner !== '' && !$inPlace) {
+            if ($destination === '/' || !PathGuard::isWithin($destination, $account->home)) {
+                return $this->finish($job, Job::STATUS_FAILED, 2, \sprintf(
+                    'Refusing to change ownership of %s: it is outside %s.',
+                    $destination,
+                    $account->home
+                ));
+            }
+
             // Extraction ran as root, so hand the files back before the user
             // ever sees them.
             $this->log($job, 'Restoring ownership to ' . $account->username . '.');
@@ -253,7 +283,7 @@ final class JobRunner
             $job,
             $result->isWarning() ? Job::STATUS_WARNING : Job::STATUS_SUCCESS,
             $result->exitCode,
-            'Restored into ' . $destination
+            $inPlace ? 'Restored in place.' : 'Restored into ' . $destination
         );
     }
 

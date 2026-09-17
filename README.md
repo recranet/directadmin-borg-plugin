@@ -286,11 +286,17 @@ and account configuration. **Browse files** is still there underneath, scoped to
 that account, for the one file a customer deleted.
 
 **Users**, at User Level, browse their own home directory at a chosen backup date
-and restore into `/home/<user>/borg_restore/`, chowned back to them. That one is
-deliberately *not* in place, and the directory is not configurable: a customer
-clicking "restore" is not making the same considered decision an administrator
-is, and there is no undo. Turn the feature off with **Repository → Let users
-restore their own files**.
+and restore in place too, back over their own live files — a file of the same
+name is replaced with the older version and the current one is not kept, which
+the page says plainly rather than in a hint. Confinement to their own home is
+the only thing bounding that, so it is enforced twice: once in the page and
+again in the worker, at the point of use. Turn the feature off with
+**Repository → Let users restore their own files**.
+
+Ownership is deliberately not touched for an in-place restore. An extract run as
+root puts back the ownership recorded in the archive, which is already correct,
+and the alternative would mean chowning the destination — which for an in-place
+restore is `/`.
 
 ### Restoring a whole user
 

@@ -44,10 +44,14 @@
                     </table>
                 </div>
 
-                <p class="borg-note">
-                    Selected items are copied into <span class="borg-mono">{{ browser.restore_dir }}</span>,
-                    keeping their folder structure. Your current files are never overwritten in place.
-                </p>
+                {# This overwrites live files, so it says so plainly rather than in
+                   a hint the customer scrolls past. #}
+                <div class="borg-alert borg-alert-warn">
+                    Selected items are restored <strong>back to where they were</strong> in
+                    <span class="borg-mono">{{ browser.restore_dir }}</span>. A file of the same
+                    name is <strong>overwritten with the older version</strong> and the current one
+                    is not kept. Anything you have created since this backup is left alone.
+                </div>
 
                 <div class="borg-actions">
                     <button class="borg-btn borg-btn-primary" type="submit">Restore selected</button>

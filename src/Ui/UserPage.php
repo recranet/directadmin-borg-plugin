@@ -160,25 +160,34 @@ final class UserPage
             throw new BorgPluginException(\sprintf('Select at most %d items at a time.', self::MAX_RESTORE_ITEMS));
         }
 
-        // The boundary that keeps a user inside their own data.
+        // The boundary that keeps a user inside their own data. It matters more
+        // now than it did: these restores go back over the live files, so the
+        // only thing standing between a customer and someone else's data is
+        // this. Every path is confined, and the worker re-checks against the
+        // same home rather than trusting what the job file says.
         $confined = array_map(static fn (string $path) => $account->confine($path), $paths);
 
-        $config = $this->plugin->config()->load();
-        $destination = $account->restoreRoot($config->userRestoreDir());
-
         $job = $this->plugin->jobs()->create(Job::TYPE_RESTORE, $account->username, [
-            'archive'     => $archive,
-            'paths'       => $confined,
-            'destination' => $destination,
-            'chown_to'    => $account->username,
-            'trigger'     => 'user',
+            'archive' => $archive,
+            'paths'   => $confined,
+            // borg strips the leading slash and writes relative to the working
+            // directory, so "/" is what puts a file back where it came from.
+            'destination' => '/',
+            'in_place'    => true,
+            // Not chown_to: an extract as root restores the ownership recorded
+            // in the archive, which for this account's own files is already
+            // right. confine_to is what makes the worker re-check every path
+            // against this home before it writes anything.
+            'confine_to' => $account->username,
+            'trigger'    => 'user',
         ]);
         $this->plugin->dispatcher()->dispatch($job);
 
         $this->flash->success(\sprintf(
-            'Restoring %d item(s) into %s. Your original files are not touched.',
+            'Restoring %d item(s) back into %s. Files of the same name are overwritten; '
+            . 'anything you have created since that backup is left alone.',
             \count($confined),
-            $destination
+            $account->home
         ));
     }
 
@@ -247,7 +256,7 @@ final class UserPage
             'entries'     => array_map([$this, 'entryToArray'], $listing->entries),
             'truncated'   => $listing->truncated,
             'crumbs'      => $this->crumbs($archive, $path, $account),
-            'restore_dir' => $account->restoreRoot($config->userRestoreDir()),
+            'restore_dir' => $account->home,
         ];
     }
 

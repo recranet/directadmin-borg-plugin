@@ -98,22 +98,6 @@ final class Configuration
         return (bool) $this->get('user_restore_enabled');
     }
 
-    /**
-     * Where a customer's own restores land, inside their home.
-     *
-     * Fixed rather than configurable. Unlike the admin restores, which put
-     * files back where they came from, this one must not touch live data: a
-     * customer clicking "restore" is not making the same considered decision an
-     * administrator is, and there is no undo. One name, always, means the
-     * support answer is the same on every server.
-     */
-    public const USER_RESTORE_DIR = 'borg_restore';
-
-    public function userRestoreDir(): string
-    {
-        return self::USER_RESTORE_DIR;
-    }
-
     public function archiveDateFormat(): string
     {
         return (string) $this->get('archive_date_format');

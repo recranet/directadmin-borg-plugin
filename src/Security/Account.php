@@ -121,11 +121,6 @@ final class Account
         return PathGuard::confine($path, $this->home);
     }
 
-    public function restoreRoot(string $directoryName): string
-    {
-        return $this->home . '/' . $directoryName;
-    }
-
     /**
      * Hand a restored tree back to the account.
      *

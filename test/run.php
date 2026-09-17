@@ -119,10 +119,11 @@ $t->isEmpty($config->save(['ssh_command' => 'ssh -i /root/.ssh/borg -o StrictHos
 
 // No longer a setting: a customer's restores always land in one fixed
 // directory inside their own home, so there is nothing to point elsewhere.
-$t->is($config->load()->userRestoreDir(), 'borg_restore', 'the user restore directory is fixed');
+// Customer restores go back in place like every other restore, so there is no
+// staging directory left to configure.
 $config->save(['user_restore_dir' => '../../etc']);
-$t->is($config->load()->userRestoreDir(), 'borg_restore', 'and cannot be moved by submitting one');
-$t->notOk(array_key_exists('user_restore_dir', Configuration::DEFAULTS), 'it is not a configurable key at all');
+$t->notOk(array_key_exists('user_restore_dir', Configuration::DEFAULTS), 'the restore directory is no longer a setting');
+$t->notOk(array_key_exists('user_restore_dir', $config->load()->toArray()), 'and submitting one does not reintroduce it');
 
 // The settings a backup would need are not merely unused now, they are gone:
 // a stale config.json from 1.x must not quietly resurrect them.
@@ -449,6 +450,70 @@ $t->is(
     (int) stat('/home/alice/borg_restore/home/alice/domains')['uid'],
     $aliceUid,
     'ownership is applied recursively, not just at the top'
+);
+
+$t->group('A customer restoring in place');
+
+// Customer restores go back over the live files now, so the test has to prove
+// the file really is replaced -- not copied somewhere -- and that the blast
+// radius is still one account.
+$live = '/home/alice/domains/example.com/public_html/index.html';
+file_put_contents($live, '<h1>broken by the customer</h1>');
+
+$inPlace = $plugin->jobs()->create(Job::TYPE_RESTORE, 'alice', [
+    'archive'     => $archive,
+    'paths'       => ['/home/alice/domains'],
+    'destination' => '/',
+    'in_place'    => true,
+    'confine_to'  => 'alice',
+]);
+$t->is($runJob($inPlace), 0, 'an in-place user restore exits cleanly');
+$inPlace = $plugin->jobs()->find($inPlace->id);
+$t->is($inPlace->status(), Job::STATUS_SUCCESS, 'it succeeds: ' . $inPlace->message());
+$t->is(trim((string) @file_get_contents($live)), '<h1>alice site</h1>', 'the live file is put back, not copied elsewhere');
+$t->notOk(is_dir('/home/alice/home'), 'nothing lands at a nested copy of the path');
+
+// The hazard this branch has to avoid: in place means the destination is "/",
+// and chowning the destination would hand the whole filesystem to a customer.
+$rootOwnerBefore = (int) stat('/')['uid'];
+
+$chownRoot = $plugin->jobs()->create(Job::TYPE_RESTORE, 'alice', [
+    'archive'     => $archive,
+    'paths'       => ['/home/alice/domains'],
+    'destination' => '/',
+    'in_place'    => true,
+    'confine_to'  => 'alice',
+    // A job file asking for exactly the dangerous combination.
+    'chown_to' => 'alice',
+]);
+$runJob($chownRoot);
+
+$t->is((int) stat('/')['uid'], $rootOwnerBefore, 'an in-place restore never chowns the filesystem root');
+$t->is((int) stat('/home')['uid'], 0, 'nor /home');
+$t->notContains(
+    $plugin->jobs()->tail($plugin->jobs()->find($chownRoot->id), 200),
+    'Restoring ownership',
+    'ownership is not touched at all for an in-place restore'
+);
+
+// Confinement still applies, and it is the only thing that does now.
+$inPlaceEscape = $plugin->jobs()->create(Job::TYPE_RESTORE, 'alice', [
+    'archive'     => $archive,
+    'paths'       => ['/home/bob'],
+    'destination' => '/',
+    'in_place'    => true,
+    'confine_to'  => 'alice',
+]);
+$runJob($inPlaceEscape);
+$t->is(
+    $plugin->jobs()->find($inPlaceEscape->id)->status(),
+    Job::STATUS_FAILED,
+    'an in-place restore cannot reach another account'
+);
+$t->is(
+    trim((string) @file_get_contents('/home/bob/secret.txt')),
+    'bob private data',
+    "and bob's files are untouched"
 );
 
 $t->group('Restore confinement (worker)');
@@ -1134,12 +1199,11 @@ $out = $post([
     'action'               => 'save_repository',
     'repository'           => '/backup/test-repo',
     'admin_backups_dir'    => '/home/admin/admin_backups',
-    'user_restore_dir'     => 'borg_restore',
     'restore_admin_backup' => '1',
     'user_restore_enabled' => '1',
 ]);
 $t->contains($out, 'Repository found and saved', 'the restore settings save alongside the repository');
-$t->is($plugin->config()->load()->userRestoreDir(), 'borg_restore', 'the restore directory was written');
+$t->ok($plugin->config()->load()->userRestoreEnabled(), 'user restores are enabled');
 $t->ok($plugin->config()->load()->userRestoreEnabled(), 'a ticked checkbox saves as on');
 
 // Unticked checkboxes are absent from a form post, which must read as false.
@@ -1147,14 +1211,12 @@ $post([
     'action'            => 'save_repository',
     'repository'        => '/backup/test-repo',
     'admin_backups_dir' => '/home/admin/admin_backups',
-    'user_restore_dir'  => 'borg_restore',
 ]);
 $t->notOk($plugin->config()->load()->userRestoreEnabled(), 'an unticked checkbox saves as off');
 $post([
     'action'               => 'save_repository',
     'repository'           => '/backup/test-repo',
     'admin_backups_dir'    => '/home/admin/admin_backups',
-    'user_restore_dir'     => 'borg_restore',
     'restore_admin_backup' => '1',
     'user_restore_enabled' => '1',
 ]);

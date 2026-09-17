@@ -791,11 +791,10 @@ final class AdminPage
     private function repositoryContext(Configuration $config): array
     {
         return [
-            'detected'         => $this->probeRepository($config),
-            'has_passphrase'   => $config->hasPassphrase(),
-            'user_restore_dir' => $config->userRestoreDir(),
-            'passphrase_file'  => $this->plugin->paths->passphraseFile(),
-            'config_file'      => $this->plugin->paths->configFile(),
+            'detected'        => $this->probeRepository($config),
+            'has_passphrase'  => $config->hasPassphrase(),
+            'passphrase_file' => $this->plugin->paths->passphraseFile(),
+            'config_file'     => $this->plugin->paths->configFile(),
         ];
     }
 
