@@ -868,6 +868,132 @@ $t->is(
 $adminUid = Account::resolve('admin', $plugin->paths)->uid;
 $t->is((int) stat('/home/admin/admin_backups/ghost.tar.gz')['uid'], $adminUid, 'ownership is restored to admin, as DirectAdmin requires');
 
+$t->group('Restoring databases');
+
+// Databases are not in a home directory. They are in DirectAdmin's own per-user
+// backup, and the screen that imports them is DirectAdmin's own -- which at User
+// Level reads /home/<user>/backups and nowhere else. So the plugin's whole job
+// here is to put that tarball there, owned by the account, and stop.
+
+$restoreDatabases = static function (string $username) use ($t, $archive, $plugin) {
+    return $t->page('admin', 'admin', ['tab' => 'archives', 'archive' => $archive, 'user' => $username], [
+        'action'     => 'restore_databases',
+        'archive'    => $archive,
+        'username'   => $username,
+        'csrf_token' => (new CsrfTokenizer($plugin->paths, $plugin->filesystem()))->token(PluginRequest::LEVEL_ADMIN, 'admin'),
+    ], 'POST');
+};
+
+$t->notOk(is_dir('/home/alice/backups'), 'the account has never taken a backup, so the directory is not there yet');
+
+$out = $restoreDatabases('alice');
+$t->contains($out, '/home/alice/backups', 'the message names where the tarball is going');
+$t->contains($out, 'Restore Backups', 'and the DirectAdmin screen that does the import');
+$t->contains($out, 'Databases', 'and what to tick on it');
+
+$dbJob = $plugin->jobs()->recent(1)[0];
+$t->is($dbJob->params()['paths'], ['/home/admin/admin_backups/user.admin.alice.tar.zst'], 'only the DirectAdmin backup is restored');
+$t->is($dbJob->params()['deliver_to'] ?? null, '/home/alice/backups', 'the job records where the file has to end up');
+$t->ok(!isset($dbJob->params()['in_place']), 'it is not an in-place restore: the archived path is not where this goes');
+$t->ok($t->waitForJob($plugin, $dbJob->id, 180)?->status() === Job::STATUS_SUCCESS, 'the delivery completes');
+
+$delivered = '/home/alice/backups/user.admin.alice.tar.zst';
+$t->ok(is_file($delivered), 'the tarball lands in the account\'s own backups directory');
+$t->is(trim((string) @file_get_contents($delivered)), 'alice config and databases', 'its contents are intact');
+$t->notOk(
+    is_dir('/home/alice/backups/home'),
+    'the archived path is not recreated underneath: DirectAdmin lists that directory, not a tree below it'
+);
+
+// DirectAdmin wants a backup it restores at User Level to belong to that user,
+// and an admin-owned file dropped in a customer's home is no use to them either.
+$t->is((int) stat($delivered)['uid'], $aliceUid, 'the tarball belongs to the account, not to admin');
+$t->is(substr(sprintf('%o', stat($delivered)['mode']), -4), '0600', 'and only they can read it');
+$t->is((int) stat('/home/alice/backups')['uid'], $aliceUid, 'so does the directory the plugin had to create');
+
+// Staging happens inside that same directory, so none of it may be left behind
+// to count against the customer's quota or to look like something restorable.
+$t->is(glob('/home/alice/backups/.borg-incoming-*') ?: [], [], 'the staging directory is cleaned up');
+
+// Doing it twice is ordinary: a second go at the same restore.
+@file_put_contents($delivered, 'stale');
+$restoreDatabases('alice');
+$againJob = $plugin->jobs()->recent(1)[0];
+$t->ok($t->waitForJob($plugin, $againJob->id, 180)?->status() === Job::STATUS_SUCCESS, 'a second delivery completes');
+$t->is(trim((string) @file_get_contents($delivered)), 'alice config and databases', 'and replaces the file that was there');
+
+$t->group('Restore Databases guards');
+
+$out = $restoreDatabases('ghost');
+$t->contains($out, 'Databases are restored into an account that exists', 'a deleted account is told what order to do this in');
+$t->notOk(is_dir('/home/ghost'), 'nothing is created for an account DirectAdmin does not have');
+
+// admin is a real account with no tarball of its own in this archive.
+$out = $restoreDatabases('admin');
+// Rendered through Twig, so the quotes around the name are escaped.
+$t->contains($out, 'No DirectAdmin backup for &quot;admin&quot;', 'an account with no tarball in this archive is refused');
+$t->notOk(is_dir('/home/admin/backups'), 'and nothing is created for it');
+
+$plugin->config()->save(['restore_admin_backup' => false]);
+$panel = $t->page('admin', 'admin', ['tab' => 'archives', 'archive' => $archive, 'user' => 'alice']);
+$t->contains($panel, 'DirectAdmin backups are switched off', 'the card explains itself when the setting is off');
+$t->notContains($panel, 'restore_databases', 'and offers no form at all');
+$t->contains($restoreDatabases('alice'), 'switched off', 'a posted action is refused too, not just hidden');
+$plugin->config()->save(['restore_admin_backup' => true]);
+
+$t->group('Delivery never writes through a symlink');
+
+// The customer owns their own home, so replacing /home/alice/backups with a
+// link is theirs to do. PathGuard is lexical by design and cannot see that, so
+// the worker resolves the directory and checks it again -- it is writing there
+// as root.
+$plugin->filesystem()->remove('/home/alice/backups');
+@symlink('/etc', '/home/alice/backups');
+$t->ok(is_link('/home/alice/backups'), 'the backups directory is now a symlink to /etc');
+
+$restoreDatabases('alice');
+$symlinkJob = $plugin->jobs()->recent(1)[0];
+$t->is($t->waitForJob($plugin, $symlinkJob->id, 180)?->status(), Job::STATUS_FAILED, 'the delivery is refused');
+$t->contains($plugin->jobs()->find($symlinkJob->id)->message(), 'symlink', 'and says why');
+$t->notOk(is_file('/etc/user.admin.alice.tar.zst'), 'nothing was written through the link');
+$t->ok(is_file('/etc/passwd'), '/etc is intact');
+@unlink('/home/alice/backups');
+
+// The same check from the other side: a job file naming a directory outside the
+// account's home, which is what a hand-edited job or an older UI could carry.
+$outsideHome = $plugin->jobs()->create(Job::TYPE_RESTORE, 'admin', [
+    'archive'      => $archive,
+    'paths'        => ['/home/admin/admin_backups/user.admin.alice.tar.zst'],
+    'destination'  => '/etc',
+    'restore_user' => 'alice',
+    'deliver_to'   => '/etc',
+]);
+$runJob($outsideHome);
+$t->is(
+    $plugin->jobs()->find($outsideHome->id)->status(),
+    Job::STATUS_FAILED,
+    'the worker refuses a delivery directory outside the account\'s home'
+);
+$t->notOk(is_file('/etc/user.admin.alice.tar.zst'), 'and writes nothing there');
+
+// Delivery is for one file. A job asking to deliver a whole tree is refused
+// rather than guessed at.
+$manyPaths = $plugin->jobs()->create(Job::TYPE_RESTORE, 'admin', [
+    'archive'      => $archive,
+    'paths'        => ['/home/admin/admin_backups/user.admin.alice.tar.zst', '/home/alice/domains'],
+    'destination'  => '/home/alice/backups',
+    'restore_user' => 'alice',
+    'deliver_to'   => '/home/alice/backups',
+]);
+$runJob($manyPaths);
+$t->is(
+    $plugin->jobs()->find($manyPaths->id)->status(),
+    Job::STATUS_FAILED,
+    'a delivery carrying more than one path is refused'
+);
+
+$plugin->filesystem()->remove('/home/alice/backups');
+
 $t->group('Restoring a home directory in place');
 
 $live = '/home/alice/domains/example.com/public_html/index.html';

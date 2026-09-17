@@ -43,6 +43,7 @@ final class Harness
             '/backup/probe-root',
             '/backup/probe-admin',
             '/home/alice/borg_restore',
+            '/home/alice/backups',
             '/tmp/pwned',
             '/tmp/borg-admin-home',
         ]);

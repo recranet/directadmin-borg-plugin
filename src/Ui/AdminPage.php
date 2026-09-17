@@ -124,6 +124,7 @@ final class AdminPage
                 'restore'              => $this->restore(),
                 'restore_domains'      => $this->restoreAccountTree('domains'),
                 'restore_email'        => $this->restoreAccountTree('imap'),
+                'restore_databases'    => $this->restoreDatabases(),
                 'restore_user'         => $this->restoreUser(),
                 'restore_admin_backup' => $this->restoreAdminBackupOnly(),
                 default                => $this->flash->error('Unknown action.'),
@@ -436,6 +437,105 @@ final class AdminPage
     }
 
     /**
+     * Put the account's DirectAdmin backup where DirectAdmin's own restore can
+     * see it, so the databases can be imported from it.
+     *
+     * Databases are the one thing a home directory does not hold. They live in
+     * DirectAdmin's per-user backup, and the thing that knows how to import
+     * them is DirectAdmin's own restore screen -- so the plugin's job ends at
+     * putting the tarball where that screen looks. It never loads SQL itself.
+     *
+     * DirectAdmin documents this route: an admin-level backup copied into a
+     * user's `backups` directory and chowned to them is restorable from User
+     * Level, and "the backups in this path always go to the restoring User".
+     * That last part is why only the account's own backup is ever put there,
+     * matched by the same dot-anchored rule the rest of the plugin uses --
+     * dropping one customer's tarball into another's directory would hand over
+     * their databases.
+     *
+     * No typed confirmation, unlike Restore Domains. This destroys nothing: it
+     * copies one file into a directory DirectAdmin made for exactly this. What
+     * it costs is disk inside the customer's quota, which the page says, and
+     * the destructive step is the operator's deliberate act on another screen.
+     */
+    private function restoreDatabases(): void
+    {
+        if (!$this->ensureReady()) {
+            return;
+        }
+
+        $config = $this->plugin->config()->load();
+
+        if (!$config->restoreAdminBackup()) {
+            $this->flash->error(
+                'DirectAdmin backups are switched off under Repository -> Restore settings, '
+                . 'and the databases are only in those.'
+            );
+
+            return;
+        }
+
+        $archive = $this->request->body()->getString('archive');
+        $username = trim($this->request->body()->getString('username'));
+
+        if ($archive === '' || $username === '') {
+            $this->flash->error('Choose an archive and an account.');
+
+            return;
+        }
+
+        try {
+            $account = Account::resolve($username, $this->plugin->paths);
+        } catch (\Throwable $e) {
+            // The tarball has nowhere to go until the account exists, and it is
+            // also what recreates the account -- so the prompt is the same one
+            // a home-directory restore gives.
+            $this->missingAccount = $username;
+            $this->flash->error($e->getMessage()
+                . ' Databases are restored into an account that exists. Restore its DirectAdmin backup below, '
+                . 'recreate the account with Admin Level -> Restore Backups, then come back here.');
+
+            return;
+        }
+
+        $adminBackup = $this->findAdminBackup($archive, $config, $username);
+
+        if ($adminBackup === null) {
+            $this->flash->error(\sprintf(
+                'No DirectAdmin backup for "%s" was found in %s in this archive, and the databases are only in that. '
+                . 'A home directory holds none of them.',
+                $username,
+                $config->adminBackupsDir()
+            ));
+
+            return;
+        }
+
+        // DirectAdmin's own name for this directory. The worker resolves it
+        // again from /etc/passwd and re-checks it before writing anything.
+        $backupsDir = $account->home . '/backups';
+
+        $this->queueRestore(
+            $archive,
+            [$adminBackup->path],
+            $backupsDir,
+            $username,
+            deliverTo: $backupsDir,
+        );
+
+        $this->flash->success(\sprintf(
+            'Putting %s into %s, owned by %s. When it finishes, log in as %s and use '
+            . 'User Level -> Create/Restore Backups -> Restore Backups, ticking Databases. '
+            . 'The tarball stays there and counts against the account\'s disk until you delete it. '
+            . 'Follow it under Jobs.',
+            basename($adminBackup->path),
+            $backupsDir,
+            $username,
+            $username
+        ));
+    }
+
+    /**
      * Restore a whole user: their home directory plus the DirectAdmin admin
      * backup holding their configuration and databases.
      *
@@ -648,6 +748,10 @@ final class AdminPage
      * correct operation, not an accident. The roots are checked here rather
      * than trusted from the caller.
      *
+     * $deliverTo is the third shape: the file is not wanted where the archive
+     * has it, so the worker stages the extract and moves the one file into that
+     * directory afterwards, handing it to the account on the way.
+     *
      * @param string[]      $paths
      * @param string[]|null $scopedRoots non-null means restore in place
      * @param string[]      $cleanPaths  directories to delete before extracting
@@ -660,6 +764,7 @@ final class AdminPage
         ?array $scopedRoots = null,
         array $cleanPaths = [],
         ?string $cleanRoot = null,
+        ?string $deliverTo = null,
     ): Job {
         $paths = array_map([PathGuard::class, 'normalize'], $paths);
 
@@ -689,6 +794,7 @@ final class AdminPage
             'paths'        => $paths,
             'destination'  => $destination,
             'restore_user' => $username,
+            'deliver_to'   => $deliverTo,
             'in_place'     => $scopedRoots !== null ? true : null,
             'clean_paths'  => $cleanPaths !== [] ? $cleanPaths : null,
             'clean_root'   => $cleanPaths !== [] ? $cleanRoot : null,
@@ -992,7 +1098,11 @@ final class AdminPage
             'domains_path'      => $home . '/domains',
             'email_path'        => $home . '/imap',
             'admin_backup'      => $adminBackup?->path,
+            'admin_backup_name' => $adminBackup === null ? null : basename($adminBackup->path),
+            'admin_backup_size' => $adminBackup?->size,
             'admin_backups_dir' => $config->adminBackupsDir(),
+            'admin_backups_on'  => $config->restoreAdminBackup(),
+            'backups_dir'       => $home . '/backups',
             'missing_account'   => $this->missingAccount,
         ];
     }

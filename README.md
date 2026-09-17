@@ -265,17 +265,18 @@ directories with one interesting child each. Accounts DirectAdmin no longer has
 are marked, because that is a different recovery — DirectAdmin must recreate the
 account from its own backup before a home directory means anything.
 
-Picking an account offers the two things that actually get asked for:
+Picking an account offers the three things that actually get asked for:
 
 - **Restore Domains** — websites, back into `/home/<user>/domains`
 - **Restore Email** — mailboxes, back into `/home/<user>/imap`
+- **Restore Databases** — the DirectAdmin backup, into `/home/<user>/backups`
 
-Both restore **in place**, to the path the files came from, with their original
-ownership. There is no destination to choose: restoring `/home/alice/domains`
-anywhere else produces a copy that then has to be moved by hand with the right
-ownership, which is not finishing the job. Each subtree is checked against the
-account's home before the job is queued, so "in place" cannot be talked into
-meaning somewhere else.
+The first two restore **in place**, to the path the files came from, with their
+original ownership. There is no destination to choose: restoring
+`/home/alice/domains` anywhere else produces a copy that then has to be moved by
+hand with the right ownership, which is not finishing the job. Each subtree is
+checked against the account's home before the job is queued, so "in place"
+cannot be talked into meaning somewhere else.
 
 **Restore Domains** can delete the directory first, for a compromised site: a
 restore only adds and overwrites, so a webshell added since the backup survives
@@ -297,6 +298,67 @@ Ownership is deliberately not touched for an in-place restore. An extract run as
 root puts back the ownership recorded in the archive, which is already correct,
 and the alternative would mean chowning the destination — which for an in-place
 restore is `/`.
+
+### Restoring databases
+
+Databases are the one thing a home directory does not contain, and this is the
+only restore in the plugin that does not finish the job itself.
+
+They live in DirectAdmin's own per-user backup —
+`/home/admin/admin_backups/user.admin.<user>.tar.zst` — and the thing that knows
+how to import them is DirectAdmin's restore screen. So **Restore Databases**
+extracts that tarball out of the archive and puts it in `/home/<user>/backups`,
+the account's own backup directory, owned by the account. Then:
+
+1. Log in as that user.
+2. **User Level → Create/Restore Backups → Restore Backups**.
+3. Pick the file, tick **Databases**, restore.
+
+This is a route DirectAdmin documents: an admin-level backup placed in a user's
+`backups` directory and chowned to them restores from User Level. The plugin
+loads no SQL of its own and never will — a control-panel plugin reimplementing
+`mysql <` against a live account is a worse version of something DirectAdmin
+already does properly.
+
+Only ever the account's own tarball goes there. DirectAdmin's user-level restore
+sends whatever is in that directory to the restoring user, so putting one
+customer's backup in another's directory would hand over their databases; the
+match is the same dot-anchored one used everywhere else in the plugin
+(`.<user>.tar.<ext>`, so `user.admin.beaujean.tar.zst` is not `jean`'s).
+
+Unlike **Restore Domains**, there is no tick-and-type-the-username: this copies
+one file and destroys nothing. The step that replaces live data is the one you
+take on DirectAdmin's screen afterwards, deliberately, with its own confirmation.
+
+Two things it does not do, both of them stated on the page:
+
+- **It does not clean up.** The tarball stays in `/home/<user>/backups` and
+  counts against the customer's disk quota — these run from 18 MB to several
+  hundred. Delete it once the restore is done.
+- **It does not create the account.** For a user DirectAdmin no longer has, the
+  sequence below is the one to follow; the databases come back as part of
+  recreating the account, not afterwards.
+
+Under the hood this is the only restore that does not leave files where borg put
+them. The job extracts into a staging directory beside the target, moves the one
+file into place and hands it to the account, then removes the staging directory
+whatever happened.
+
+borg could write it there directly — `extract` takes `--strip-components` — and
+the staging step is not about getting the path right. It is about the file
+appearing at its final name complete or not at all. DirectAdmin offers whatever
+is in `/home/<user>/backups` as something to restore from, and an extract is not
+atomic: written in place, the tarball would sit there growing for the length of
+the run, and a job that died halfway would leave a truncated one under exactly
+the name a good one has. A rename within one filesystem has neither problem, and
+a failed run leaves nothing in the customer's home at all. The delivery directory is resolved and re-checked
+against the account's real home in the worker, and a symlink where
+`/home/<user>/backups` should be is refused rather than followed — the customer
+owns that directory, the worker writes there as root, and `PathGuard` is
+lexical by design.
+
+Turn the whole thing off with **Repository → Use DirectAdmin's own per-user
+backups**, which also drops the tarball from a whole-account restore.
 
 ### Restoring a whole user
 
@@ -592,6 +654,13 @@ real environment:
   and a sibling with a shared prefix
 - archive-name date parsing, including names with no date, dates that are not
   the suffix, and impossible dates like `2026-13-45`
+- **Restore Databases** end to end: that the tarball arrives in
+  `/home/<user>/backups` owned by the account and mode `0600`, that the archived
+  path is not recreated underneath it, that the staging directory is always
+  cleaned up, that a second run replaces the file — and that the delivery is
+  refused when `/home/<user>/backups` has been replaced with a symlink to
+  `/etc`, when a job file names a directory outside the account's home, or when
+  it asks to deliver more than one path
 - job retention, oversized directory listings, and log tailing past 64 KB
 
 ---

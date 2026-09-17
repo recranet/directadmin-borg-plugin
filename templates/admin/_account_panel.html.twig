@@ -1,6 +1,7 @@
-{# One account, one archive: the two restores that are actually asked for, and
-   a way through to the files for everything else. Every restore here goes back
-   where it came from, so there is no destination to choose. #}
+{# One account, one archive: the restores that are actually asked for, and a way
+   through to the files for everything else. Nothing here has a destination to
+   choose -- files go back where they came from, and the DirectAdmin backup goes
+   to the one directory DirectAdmin's own restore screen reads. #}
 <div class="borg-card">
     <h2>
         {% include 'partial/user_icon.html.twig' %}
@@ -10,7 +11,8 @@
     <p class="borg-note" style="margin-top:0">
         Restores below put files back in <span class="borg-mono">{{ user_panel.home }}</span>,
         with their original ownership. Existing files are overwritten; anything created since
-        the backup is left alone unless you ask for it to be deleted first.
+        the backup is left alone unless you ask for it to be deleted first. Databases are the
+        exception: they are not in a home directory at all.
     </p>
 
     {% if user_panel.index_stale %}
@@ -112,6 +114,65 @@
     {% endif %}
 </div>
 
+{# ---------------------------------------------------------------- databases #}
+<div class="borg-card">
+    <h2>Restore Databases</h2>
+
+    {% if not user_panel.admin_backups_on %}
+        <p class="borg-empty">
+            DirectAdmin backups are switched off under
+            <a href="{{ url({ tab: 'repository' }) }}">Repository &rarr; Restore settings</a>,
+            and the databases are only in those.
+        </p>
+    {% elseif not user_panel.admin_backup %}
+        <p class="borg-empty">
+            No DirectAdmin backup for this account is in this archive, and the databases are
+            only in that. A home directory holds none of them.
+        </p>
+    {% else %}
+        <p class="borg-note" style="margin-top:0">
+            Databases are not in the home directory. They are in DirectAdmin's own per-user
+            backup, and the screen that knows how to import them is DirectAdmin's own &mdash;
+            so this puts that backup where that screen looks, and stops there. No SQL is loaded
+            by this plugin.
+        </p>
+
+        <p class="borg-note">
+            Copying <span class="borg-mono">{{ user_panel.admin_backup_name }}</span>
+            ({{ user_panel.admin_backup_size|bytes }}) into
+            <span class="borg-mono">{{ user_panel.backups_dir }}</span>, owned by
+            <span class="borg-mono">{{ user_panel.username }}</span>. A file of that name already
+            there is replaced.
+        </p>
+
+        <ol class="borg-note">
+            <li>Put the backup in place with the button below.</li>
+            <li>Log in as <span class="borg-mono">{{ user_panel.username }}</span> and open
+                <strong>User Level &rarr; Create/Restore Backups &rarr; Restore Backups</strong>.</li>
+            <li>Pick that file, tick <strong>Databases</strong>, and restore.</li>
+        </ol>
+
+        <div class="borg-alert borg-alert-warn">
+            Restoring databases replaces live data and there is no undo &mdash; the tick is on
+            DirectAdmin's screen, not this one. The tarball also stays in
+            <span class="borg-mono">{{ user_panel.backups_dir }}</span> afterwards and counts
+            against the account's disk quota; nothing here removes it, so delete it once the
+            restore is done.
+        </div>
+
+        <form method="post" action="{{ url({ tab: 'archives', archive: user_panel.archive, user: user_panel.username }) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="action" value="restore_databases">
+            <input type="hidden" name="archive" value="{{ user_panel.archive }}">
+            <input type="hidden" name="username" value="{{ user_panel.username }}">
+
+            <div class="borg-actions">
+                <button class="borg-btn borg-btn-primary" type="submit">Restore Databases</button>
+            </div>
+        </form>
+    {% endif %}
+</div>
+
 {# ------------------------------------------------------------ whole account #}
 <div class="borg-card">
     <h2>Restore the whole account</h2>
@@ -174,7 +235,7 @@
 <div class="borg-card">
     <h2>Browse files</h2>
     <p class="borg-note" style="margin-top:0">
-        For anything the two buttons above do not cover &mdash; one file a customer deleted,
+        For anything the buttons above do not cover &mdash; one file a customer deleted,
         say. Browsing is scoped to this account.
     </p>
     <div class="borg-actions">

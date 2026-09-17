@@ -7,9 +7,12 @@ namespace Recranet\DirectAdminBorg\Job;
 use Recranet\DirectAdminBorg\Borg\BorgRunner;
 use Recranet\DirectAdminBorg\Borg\Repository;
 use Recranet\DirectAdminBorg\Config\Configuration;
+use Recranet\DirectAdminBorg\Exception\BorgPluginException;
+use Recranet\DirectAdminBorg\Exception\UnsafePathException;
 use Recranet\DirectAdminBorg\Plugin;
 use Recranet\DirectAdminBorg\Security\Account;
 use Recranet\DirectAdminBorg\Security\PathGuard;
+use Symfony\Component\Filesystem\Filesystem;
 use Symfony\Component\Lock\LockInterface;
 
 /**
@@ -239,6 +242,23 @@ final class JobRunner
             }
         }
 
+        // Resolved before a byte is written: a delivery that names a directory
+        // this job may not write to should fail now, not after ten minutes of
+        // extracting.
+        $delivery = $this->resolveDelivery($params, $paths, $inPlace);
+
+        $staging = null;
+        if ($delivery !== null) {
+            $delivery = $this->prepareDelivery($delivery, $filesystem);
+
+            // Extracted beside the target rather than into it. DirectAdmin's
+            // restore screen lists whatever is in that directory, and a
+            // half-written tarball offered as something to restore from is
+            // worse than one that is not there yet.
+            $staging = $delivery->directory . '/.borg-incoming-' . $job->id;
+            $destination = $staging;
+        }
+
         $filesystem->mkdir($destination, 0750);
 
         if (!is_dir($destination)) {
@@ -247,15 +267,27 @@ final class JobRunner
 
         $this->log($job, \sprintf('Extracting %d path(s) from %s into %s.', \count($paths), $archive, $destination));
 
-        $result = $repository->runner()->run(
-            $repository->extractArguments($archive, $paths),
-            BorgRunner::NO_TIMEOUT,
-            $this->sink($job),
-            $destination,
-        );
+        try {
+            $result = $repository->runner()->run(
+                $repository->extractArguments($archive, $paths),
+                BorgRunner::NO_TIMEOUT,
+                $this->sink($job),
+                $destination,
+            );
 
-        if (!$result->isSuccessful()) {
-            return $this->finish($job, Job::STATUS_FAILED, $result->exitCode, 'Restore failed: ' . $result->errorMessage());
+            if (!$result->isSuccessful()) {
+                return $this->finish($job, Job::STATUS_FAILED, $result->exitCode, 'Restore failed: ' . $result->errorMessage());
+            }
+
+            if ($delivery !== null) {
+                $this->deliver($job, $delivery, $destination, $paths[0], $filesystem);
+            }
+        } finally {
+            // However this ends, the staging directory does not stay behind in
+            // a customer's home directory counting against their quota.
+            if ($staging !== null) {
+                $filesystem->remove($staging);
+            }
         }
 
         // Ownership. Only for a staged restore, and never in place: an extract
@@ -264,7 +296,10 @@ final class JobRunner
         // destination -- which is "/" -- and handing the entire filesystem to
         // a customer. The destination is checked again here rather than relying
         // on the branch above having got it right.
-        if ($account !== null && $owner !== '' && !$inPlace) {
+        // A delivery is excluded as well: its destination is the staging
+        // directory, which by now has been removed, and the file it produced
+        // was handed to the account by deliver() already.
+        if ($account !== null && $owner !== '' && !$inPlace && $delivery === null) {
             if ($destination === '/' || !PathGuard::isWithin($destination, $account->home)) {
                 return $this->finish($job, Job::STATUS_FAILED, 2, \sprintf(
                     'Refusing to change ownership of %s: it is outside %s.',
@@ -279,12 +314,149 @@ final class JobRunner
             $account->takeOwnership($destination, $filesystem);
         }
 
+        if ($delivery !== null) {
+            $message = 'Delivered ' . $delivery->filename . ' to ' . $delivery->directory . '.';
+        } else {
+            $message = $inPlace ? 'Restored in place.' : 'Restored into ' . $destination;
+        }
+
         return $this->finish(
             $job,
             $result->isWarning() ? Job::STATUS_WARNING : Job::STATUS_SUCCESS,
             $result->exitCode,
-            $inPlace ? 'Restored in place.' : 'Restored into ' . $destination
+            $message
         );
+    }
+
+    /**
+     * Where this restore has to leave the file, when that is not where borg
+     * writes it.
+     *
+     * Restore Databases is the one caller: the tarball has to reach the
+     * account's own backups directory, which is the only place DirectAdmin's
+     * User Level restore screen reads, and that screen is the thing that
+     * actually knows how to import databases.
+     *
+     * It is staged and moved rather than extracted straight there -- borg would
+     * do that with --strip-components -- because a rename is atomic where an
+     * extract is not, and DirectAdmin lists that directory as backups to
+     * restore from. See Delivery.
+     *
+     * Re-derived from the job file rather than trusted, like every other path
+     * this worker acts on: it runs as root and is about to write inside a
+     * customer's home directory.
+     *
+     * @param array<string,mixed> $params
+     * @param string[]            $paths
+     */
+    private function resolveDelivery(array $params, array $paths, bool $inPlace): ?Delivery
+    {
+        $deliverTo = trim((string) ($params['deliver_to'] ?? ''));
+        if ($deliverTo === '') {
+            return null;
+        }
+
+        if ($inPlace) {
+            throw new BorgPluginException('A restore cannot both go back in place and be delivered somewhere else.');
+        }
+        if (\count($paths) !== 1) {
+            throw new BorgPluginException('A delivered restore carries exactly one file.');
+        }
+
+        $username = trim((string) ($params['restore_user'] ?? ''));
+        if ($username === '') {
+            throw new BorgPluginException('A delivered restore must name the account it belongs to.');
+        }
+
+        // The account is resolved from /etc/passwd, so the home that bounds the
+        // delivery is the real one rather than whatever the job file says.
+        $account = Account::resolve($username, $this->plugin->paths);
+
+        $directory = $account->confine($deliverTo);
+        if ($directory === rtrim($account->home, '/')) {
+            throw new UnsafePathException('Refusing to deliver into the home directory itself.');
+        }
+
+        $filename = basename($paths[0]);
+        if ($filename === '' || $filename === '.' || $filename === '..') {
+            throw new UnsafePathException('The restored path has no filename to deliver.');
+        }
+
+        return new Delivery($account, $directory, $filename);
+    }
+
+    /**
+     * The delivery directory, created if it is not there, owned by the account.
+     *
+     * A symlink is refused rather than followed. PathGuard is lexical by
+     * design -- it cannot see that /home/alice/backups is a link to /etc -- and
+     * a customer owns their own home, so the check that the directory really is
+     * inside that home is made again against its resolved path. Without this,
+     * a link planted by the customer would decide where root writes.
+     */
+    private function prepareDelivery(Delivery $delivery, Filesystem $filesystem): Delivery
+    {
+        $directory = $delivery->directory;
+
+        if (is_link($directory)) {
+            throw new UnsafePathException($directory . ' is a symlink; refusing to write through it.');
+        }
+        if (file_exists($directory) && !is_dir($directory)) {
+            throw new UnsafePathException($directory . ' exists and is not a directory.');
+        }
+
+        if (!is_dir($directory)) {
+            // DirectAdmin makes this directory itself the first time a user
+            // takes a backup, so it is usually already here; creating it is for
+            // the account that has never used the feature.
+            $filesystem->mkdir($directory, 0750);
+            $filesystem->chown($directory, $delivery->account->uid, false);
+            $filesystem->chgrp($directory, $delivery->account->gid, false);
+        }
+
+        $resolved = realpath($directory);
+        $home = realpath($delivery->account->home) ?: $delivery->account->home;
+
+        if ($resolved === false || !PathGuard::isWithin($resolved, $home)) {
+            throw new UnsafePathException(\sprintf('%s does not resolve to a path inside %s.', $directory, $delivery->account->home));
+        }
+
+        return $delivery->withDirectory($resolved);
+    }
+
+    /** Move the one staged file into place and hand it to the account. */
+    private function deliver(Job $job, Delivery $delivery, string $staging, string $path, Filesystem $filesystem): void
+    {
+        $source = rtrim($staging, '/') . '/' . PathGuard::toArchiveMember($path);
+        $target = $delivery->target();
+
+        if (is_link($source) || !is_file($source)) {
+            throw new BorgPluginException('The restore did not produce ' . $path . '.');
+        }
+
+        // Replaced, not written through: a link of that name sitting in the
+        // customer's own directory would otherwise choose the destination.
+        if (file_exists($target) || is_link($target)) {
+            $this->log($job, 'Replacing the existing ' . $target . '.');
+            $filesystem->remove($target);
+        }
+
+        $filesystem->rename($source, $target);
+
+        // DirectAdmin reads these as root, so the mode is not about DirectAdmin
+        // -- it is about the tarball holding one customer's databases and
+        // configuration while it sits in a directory they can reach. The
+        // ownership is what DirectAdmin does require of a backup it restores.
+        $filesystem->chmod($target, 0600);
+        $filesystem->chown($target, $delivery->account->uid, false);
+        $filesystem->chgrp($target, $delivery->account->gid, false);
+
+        $this->log($job, \sprintf(
+            'Delivered %s to %s, owned by %s.',
+            $delivery->filename,
+            $delivery->directory,
+            $delivery->account->username
+        ));
     }
 
     /**
@@ -294,18 +466,18 @@ final class JobRunner
      * anything else that is not part of a website with it, so a pre-clean is
      * always a subdirectory.
      *
-     * @throws \Recranet\DirectAdminBorg\Exception\UnsafePathException
+     * @throws UnsafePathException
      */
     private function assertCleanable(string $path, string $root): string
     {
         if ($root === '' || $root === '/') {
-            throw new \Recranet\DirectAdminBorg\Exception\UnsafePathException('No safe root for a pre-clean.');
+            throw new UnsafePathException('No safe root for a pre-clean.');
         }
 
         $path = PathGuard::confine($path, $root);
 
         if ($path === rtrim($root, '/')) {
-            throw new \Recranet\DirectAdminBorg\Exception\UnsafePathException('Refusing to delete ' . $root . ' itself; choose a subdirectory.');
+            throw new UnsafePathException('Refusing to delete ' . $root . ' itself; choose a subdirectory.');
         }
 
         return $path;

@@ -79,8 +79,14 @@
         <div class="borg-field">
             <label>
                 <input type="checkbox" name="restore_admin_backup" value="1"{{ config.restore_admin_backup ? ' checked' : '' }}>
-                Offer to restore the DirectAdmin backup alongside a home directory
+                Use DirectAdmin's own per-user backups
             </label>
+            <span class="borg-hint">
+                Adds the tarball to a whole-account restore, and enables <strong>Restore
+                Databases</strong>, which puts it in the account's own
+                <span class="borg-mono">backups</span> directory for DirectAdmin's User Level
+                restore screen. Off, and the plugin restores home directories only.
+            </span>
         </div>
 
         <div class="borg-field">
