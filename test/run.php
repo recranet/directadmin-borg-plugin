@@ -15,6 +15,7 @@ require_once __DIR__ . '/../bootstrap.php';
 require_once __DIR__ . '/lib/Harness.php';
 require_once __DIR__ . '/lib/PrivilegeProbe.php';
 
+use Recranet\DirectAdminBorg\Borg\ArchiveName;
 use Recranet\DirectAdminBorg\Borg\BorgRunner;
 use Recranet\DirectAdminBorg\Borg\Repository;
 use Recranet\DirectAdminBorg\Config\Configuration;
@@ -73,6 +74,17 @@ $t->notOk(PathGuard::isWithin('/home/bo', '/home/bob'), 'a shorter path is not w
 
 // ============================================================== account rules
 
+$t->group('Account names');
+
+// One rule, one place: the routing and the resolver must not be able to
+// disagree about what an account name is.
+foreach (['alice', 'bob_2', 'a-b', '_svc'] as $ok) {
+    $t->ok(Account::isValidName($ok), '"' . $ok . '" is a usable account name');
+}
+foreach (['../../etc', 'alice/../bob', '.', '', '/etc', 'a b', '1abc', str_repeat('a', 33)] as $bad) {
+    $t->notOk(Account::isValidName($bad), '"' . $bad . '" is not');
+}
+
 $t->group('Account confinement');
 
 $alice = Account::resolve('alice', $plugin->paths);
@@ -105,10 +117,12 @@ $t->isEmpty($config->save(['repository' => 'borg@host:/srv/repo']), 'accepts scp
 $t->notEmpty($config->save(['ssh_command' => "ssh -i k\nid"]), 'rejects a newline in BORG_RSH');
 $t->isEmpty($config->save(['ssh_command' => 'ssh -i /root/.ssh/borg -o StrictHostKeyChecking=yes']), 'accepts a normal ssh command');
 
-$t->notEmpty($config->save(['user_restore_dir' => '../../etc']), 'rejects traversal in the restore directory');
-$t->notEmpty($config->save(['user_restore_dir' => 'a/b']), 'rejects a nested restore directory');
-$t->notEmpty($config->save(['user_restore_dir' => '..']), 'rejects ".." as the restore directory');
-$t->isEmpty($config->save(['user_restore_dir' => 'borg_restore']), 'accepts a plain restore directory name');
+// No longer a setting: a customer's restores always land in one fixed
+// directory inside their own home, so there is nothing to point elsewhere.
+$t->is($config->load()->userRestoreDir(), 'borg_restore', 'the user restore directory is fixed');
+$config->save(['user_restore_dir' => '../../etc']);
+$t->is($config->load()->userRestoreDir(), 'borg_restore', 'and cannot be moved by submitting one');
+$t->notOk(array_key_exists('user_restore_dir', Configuration::DEFAULTS), 'it is not a configurable key at all');
 
 // The settings a backup would need are not merely unused now, they are gone:
 // a stale config.json from 1.x must not quietly resurrect them.
@@ -225,6 +239,188 @@ $t->ok(in_array('domains', $names, true), 'directory listing includes subdirecto
 $t->notOk(in_array('index.html', $names, true), 'directory listing is one level deep only');
 $t->ok($directory->entries[0]->isDirectory(), 'directories sort before files');
 $t->notOk($directory->truncated, 'a small directory is not reported as truncated');
+
+// ============================================================ archive naming
+
+$t->group('Reading the date out of an archive name');
+
+$t->is(ArchiveName::date('srv01-2026-09-17_01:01:22'), '2026-09-17T01:01:22', 'parses a full timestamp');
+$t->is(ArchiveName::date('srv01-2026-09-17_01:01'), '2026-09-17T01:01:00', 'parses a minute-resolution timestamp');
+$t->is(ArchiveName::date('host.example.com-2026-09-17'), '2026-09-17T00:00:00', 'parses a date-only name');
+$t->is(ArchiveName::date('backup-20260917-010122'), '2026-09-17T01:01:22', 'parses a compact timestamp');
+$t->is(ArchiveName::date('srv01-2026-09-17T01:01:22'), '2026-09-17T01:01:22', 'accepts an ISO "T" separator');
+
+// A hostname with digits in it must not be mistaken for a date, and a name
+// with no date at all has to say so rather than inventing one.
+$t->is(ArchiveName::date('nightly'), null, 'a name with no date yields null');
+$t->is(ArchiveName::date('srv01-manual-run'), null, 'a name with digits but no date yields null');
+$t->is(ArchiveName::date('srv-2026-13-45'), null, 'an impossible date is rejected rather than shown');
+$t->is(ArchiveName::date('2026-09-17-something'), null, 'a date that is not the suffix is not used');
+
+$t->is(ArchiveName::format('srv01-2026-09-17_01:01'), '{now:%Y-%m-%d_%H:%M}', 'the template is reported back');
+$t->is(ArchiveName::format('nightly'), null, 'no template is claimed for an undated name');
+$t->is(ArchiveName::prefix('rn-webhost.example.com-2026-09-17_01:01'), 'rn-webhost.example.com', 'the prefix is what is left over');
+$t->is(ArchiveName::prefix('nightly'), 'nightly', 'an undated name is all prefix');
+
+$t->is(Format::date('2026-09-17T01:01:22'), '17 September 2026', 'a date is spelled out rather than numbered');
+$t->is(Format::time('2026-09-17T01:01:22'), '01:01', 'the time of day stands on its own');
+$t->is(Format::date(''), '-', 'a missing date does not render as 1970');
+
+// ============================================================= archive index
+
+$t->group('Indexing an archive');
+
+$index = $plugin->archiveIndex();
+
+$t->notOk($index->exists($archive), 'an archive starts out unindexed');
+
+// The default: directories and links only. On a real server that is a fifth of
+// the entries, and it changes nothing about what can be restored.
+$indexJob = $plugin->jobs()->create(Job::TYPE_INDEX, 'test', ['archive' => $archive]);
+$t->is($runJob($indexJob), 0, 'the index job exits cleanly');
+$indexJob = $plugin->jobs()->find($indexJob->id);
+$t->is($indexJob->status(), Job::STATUS_SUCCESS, 'indexing succeeds: ' . $indexJob->message());
+$t->ok($index->exists($archive), 'the index file is written');
+$t->ok(($index->count($archive) ?? 0) > 0, 'the entry count is recorded');
+$t->notOk($index->includesFiles($archive), 'by default it records no files');
+
+// ...with one exception. Whether an account has a DirectAdmin backup in the
+// archive decides what the restore screen can offer, and asking borg that
+// question costs a full scan every time the screen is opened.
+$daBackups = $index->listDirectory($archive, $plugin->config()->load()->adminBackupsDir());
+$t->ok(
+    count(array_filter($daBackups->entries, static fn ($e) => !$e->isDirectory())) > 0,
+    'the DirectAdmin backups directory keeps its files even in a directory-only index'
+);
+$t->ok(
+    Repository::pickAdminBackup($daBackups->entries, 'alice') !== null,
+    'so a user\'s backup is found without going back to borg'
+);
+
+$t->group('A directory-only index');
+
+$dirsOnly = array_map(static fn ($e) => $e->name, $index->listDirectory($archive, '/home/alice')->entries);
+
+$t->ok(in_array('domains', $dirsOnly, true), 'directories are listed');
+$t->notOk(in_array('.my.cnf', $dirsOnly, true), 'regular files are not');
+
+$t->ok(
+    $index->isStale($archive, $plugin->config()->load()->adminBackupsDir(), true),
+    'a directory-only index reads as stale once files are wanted'
+);
+
+$dirsOnlyCount = $index->count($archive) ?? 0;
+$archiveEntries = count($plugin->repository()->listSubtree($archive)['rows']);
+$t->ok($dirsOnlyCount > 0 && $dirsOnlyCount < $archiveEntries,
+    'the directory-only index is smaller than the archive (' . $dirsOnlyCount . ' of ' . $archiveEntries . ')');
+
+// Skipping files must not skip symlinks: public_html is often a link into a
+// repository checkout beside it, and not seeing that is how a cleanup misses.
+$aliceEntries = $index->listDirectory($archive, '/home/alice')->entries;
+foreach ($aliceEntries as $entry) {
+    $t->notOk($entry->type === '-', 'nothing of type "-" is in a directory-only index');
+    break;
+}
+
+$t->group('Indexing files as well');
+
+$fullJob = $plugin->jobs()->create(Job::TYPE_INDEX, 'test', ['archive' => $archive, 'files' => true]);
+$runJob($fullJob);
+$t->is($plugin->jobs()->find($fullJob->id)->status(), Job::STATUS_SUCCESS, 'a full index succeeds');
+$t->ok($index->includesFiles($archive), 'the index records that it has files in it');
+$t->ok(($index->count($archive) ?? 0) > $dirsOnlyCount, 'and it holds more than the directory-only one did');
+
+$fromIndex = $index->listDirectory($archive, '/home/alice');
+$indexNames = array_map(static fn ($e) => $e->name, $fromIndex->entries);
+
+$t->ok($fromIndex->readable, 'the index answers a directory listing');
+$t->ok(in_array('domains', $indexNames, true), 'it lists subdirectories');
+$t->ok(in_array('.my.cnf', $indexNames, true), 'it lists dotfiles');
+$t->notOk(in_array('index.html', $indexNames, true), 'it is one level deep only');
+$t->ok($fromIndex->entries[0]->isDirectory(), 'directories sort before files');
+
+// The index must agree with borg exactly, or a restore would be offered a file
+// that is not in the archive -- or worse, hide one that is.
+$fromBorg = $plugin->repository()->listDirectory($archive, '/home/alice');
+$borgNames = array_map(static fn ($e) => $e->name, $fromBorg->entries);
+sort($indexNames);
+sort($borgNames);
+$t->is($indexNames, $borgNames, 'the index returns exactly what borg returns');
+
+$t->group('The cases a binary search gets wrong');
+
+// The root, which is the listing that used to kill the page outright.
+$root = $index->listDirectory($archive, '/');
+$t->ok(count($root->entries) > 0, 'the archive root can be listed at all');
+$t->ok(in_array('home', array_map(static fn ($e) => $e->name, $root->entries), true), 'the root lists its top-level entries');
+
+// First and last directories in sort order are the bisection's edge cases.
+$deep = $index->listDirectory($archive, '/home/alice/domains/example.com/public_html');
+$t->ok(count($deep->entries) > 0, 'a directory deep in the tree is found');
+
+$t->is($index->listDirectory($archive, '/no/such/directory')->entries, [], 'a directory that is not there lists empty');
+$t->ok($index->listDirectory($archive, '/no/such/directory')->readable, 'and is reported readable, not broken');
+
+// A shared prefix is the classic off-by-one: /home must not pick up /home2.
+$t->notOk(
+    in_array('bob.example', array_map(static fn ($e) => $e->name, $index->listDirectory($archive, '/home/alice')->entries), true),
+    'a sibling directory does not leak into a listing'
+);
+
+$t->group('Refreshing an index from the module');
+
+// An index is a snapshot of settings as much as of an archive. Change where
+// DirectAdmin backups are expected and the old index quietly stops answering
+// the question the restore screen asks, so the UI has to say so and offer to
+// rebuild -- otherwise the fix is to delete files on the server by hand.
+$adminDirNow = $plugin->config()->load()->adminBackupsDir();
+$t->notOk($index->isStale($archive, $adminDirNow, false), 'a freshly built index is not stale');
+$t->ok($index->isStale($archive, '/somewhere/else', false), 'moving the backups directory makes it stale');
+$t->notOk($index->isStale($archive, $adminDirNow, true), 'an index that has files is not stale when files are wanted');
+$t->notOk($index->isStale('never-indexed', $adminDirNow, false), 'an archive with no index is not "stale"');
+$t->notOk($index->isStale($archive, rtrim($adminDirNow, '/') . '/', false), 'a trailing slash is not a change');
+$t->ok($index->builtAt($archive) !== null, 'the index records when it was built');
+
+$refreshed = $t->page('admin', 'admin', ['tab' => 'archives'], [
+    'action'     => 'build_index',
+    'archive'    => $archive,
+    'csrf_token' => (new CsrfTokenizer($plugin->paths, $plugin->filesystem()))->token(PluginRequest::LEVEL_ADMIN, 'admin'),
+], 'POST');
+$t->contains($refreshed, 'Indexing started', 'the module can rebuild an index without shell access');
+$t->ok($t->waitForJob($plugin, $plugin->jobs()->recent(1)[0]->id, 300)?->isFinished() === true, 'the rebuild finishes');
+
+$t->group('Index housekeeping');
+
+$t->ok($index->exists($archive), 'the index survives until purged');
+$index->purge('some-other-archive');
+$t->notOk($index->exists($archive), 'purge removes the index of an archive that is gone');
+
+// Rebuild it with files, since the rest of the suite browses to individual
+// files through the admin and user pages.
+$rebuild = $plugin->jobs()->create(Job::TYPE_INDEX, 'test', ['archive' => $archive, 'files' => true]);
+$runJob($rebuild);
+$t->ok($index->exists($archive), 'it can be rebuilt');
+$t->ok($index->includesFiles($archive), 'and comes back with files in it');
+
+$noArchive = $plugin->jobs()->create(Job::TYPE_INDEX, 'test', []);
+$t->is($runJob($noArchive), 1, 'an index job with no archive name fails');
+$t->contains($plugin->jobs()->find($noArchive->id)->message(), 'missing an archive name', 'and says why');
+
+$t->group('Listing is streamed, not buffered');
+
+// The bug this guards against: listing an archive without a path made borg
+// print every entry in it, symfony/process buffered the lot, and PHP died on
+// its memory limit. The cap has to apply as the lines arrive, so peak memory
+// must not scale with how much borg would have printed.
+$before = memory_get_peak_usage(true);
+$capped = $plugin->repository()->listSubtree($archive, null, 5);
+$growth = memory_get_peak_usage(true) - $before;
+
+$t->is(count($capped['rows']), 5, 'the cap is honoured');
+$t->ok($capped['truncated'], 'hitting the cap is reported as truncation');
+$t->ok($capped['result']->isSuccessful(), 'hanging up on borg early is not treated as a failure');
+$t->ok($growth < 8 * 1024 * 1024, 'peak memory barely moves (' . round($growth / 1024) . ' KB) despite listing the whole archive');
+$t->is($capped['result']->stdout, '', 'nothing is retained in the result');
 
 // ==================================================================== restore
 
@@ -345,11 +541,61 @@ $t->contains($out, 'Repository', 'tabs render');
 $t->notContains($out, 'Fatal error', 'no PHP errors leak into the page');
 $t->notContains($out, 'not root', 'no root warning is shown when running as root');
 
-$t->contains($t->page('admin', 'admin', ['tab' => 'archives']), $archive, 'the admin archive list shows the archive');
+// The list is dates, not archive names: the name is noise on every row and
+// identical apart from the timestamp already shown. It still has to be in the
+// link target, so the check is against the visible text only.
+$archiveTab = $t->page('admin', 'admin', ['tab' => 'archives']);
+$visible = (string) preg_replace('/\s(?:href|action|value)="[^"]*"/', '', $archiveTab);
+$t->notContains($visible, $archive, 'the archive list does not print raw archive names');
+$t->contains($archiveTab, 'archive=' . rawurlencode($archive), 'but the row still links to that archive');
+$t->contains($archiveTab, 'borg-cal', 'each row carries the calendar icon');
+$t->contains($archiveTab, '<th>Date</th>', 'the list is headed by date');
+$t->notContains($archiveTab, '<th>Age</th>', 'the age column is gone');
+$t->notContains($archiveTab, 'Named <span', 'the naming-template note is gone');
 
-$out = $t->page('admin', 'admin', ['tab' => 'archives', 'archive' => $archive, 'path' => '/home']);
-$t->contains($out, 'alice', 'an admin can browse every account');
-$t->contains($out, 'bob', 'admin browsing is deliberately unconfined');
+$t->group('An archive opens on its accounts');
+
+// The archive root of a DirectAdmin backup is `home` and `etc`. Neither is
+// somewhere anyone wants to be, so opening an archive lists the accounts in it.
+$opened = $t->page('admin', 'admin', ['tab' => 'archives', 'archive' => $archive]);
+$t->contains($opened, 'Accounts in this backup', 'opening an archive lists accounts');
+$t->contains($opened, 'alice', 'every account in the archive is listed');
+$t->contains($opened, 'bob', 'including ones other than the first');
+$t->contains($opened, 'borg-usericon', 'each account carries the user icon');
+$t->notContains($opened, '>etc/<', 'the filesystem root is not offered');
+$t->notContains($opened, 'Restore into', 'there is no destination to fill in');
+
+$t->group('An account offers the two restores that get asked for');
+
+$panel = $t->page('admin', 'admin', ['tab' => 'archives', 'archive' => $archive, 'user' => 'alice']);
+$t->contains($panel, 'Restore Domains', 'Domains is offered');
+$t->contains($panel, 'Restore Email', 'Email is offered');
+$t->contains($panel, '/home/alice/domains', 'it names the exact path it will restore into');
+$t->contains($panel, '/home/alice/imap', 'and the same for mail');
+$t->contains($panel, 'name="clean_first"', 'Domains offers to clear the directory first');
+$t->contains($panel, 'name="clean_confirm"', 'and makes you type the username to do it');
+$t->contains($panel, 'Restore the whole account', 'the whole-account restore is still reachable');
+$t->contains($panel, 'Browse files', 'so is the file browser');
+$t->notContains($panel, 'name="destination"', 'no restore on this screen asks for a path');
+
+// The account name becomes /home/<user>, so a name that is not an account name
+// must not be used as one -- otherwise ?user=../../etc browses /etc while the
+// breadcrumbs claim to be inside a customer's home.
+foreach (['../../etc', '../bob', 'alice/../bob', '.', '/etc'] as $bogus) {
+    $out = $t->page('admin', 'admin', ['tab' => 'archives', 'archive' => $archive, 'user' => $bogus]);
+    $t->contains($out, 'Invalid account name', 'the account name "' . $bogus . '" is rejected');
+    $t->notContains($out, 'Restore Domains', 'and no restore is offered for it');
+}
+$t->notContains(
+    $t->page('admin', 'admin', ['tab' => 'archives', 'archive' => $archive, 'user' => '../../etc', 'path' => '/etc']),
+    'shadow',
+    'a traversal in the account name cannot be used to browse outside /home'
+);
+
+// Browsing is reached through an account, and stays inside it.
+$browse = $t->page('admin', 'admin', ['tab' => 'archives', 'archive' => $archive, 'user' => 'alice', 'path' => '/home/alice']);
+$t->contains($browse, 'domains', 'browsing an account lists its directories');
+$t->notContains($browse, 'name="destination"', 'the browser does not ask for a path either');
 
 $repoTab = $t->page('admin', 'admin', ['tab' => 'repository']);
 $t->contains($repoTab, 'Existing repository', 'the repository tab renders');
@@ -435,7 +681,7 @@ $adminDir = $plugin->config()->load()->adminBackupsDir();
 
 $aliceBackup = $plugin->repository()->findAdminBackup($archive, $adminDir, 'alice');
 $t->ok($aliceBackup !== null, 'finds a .tar.zst backup');
-$t->is($aliceBackup?->path, '/home/admin/admin_backups/alice.tar.zst', 'returns the full archive path');
+$t->is($aliceBackup?->path, '/home/admin/admin_backups/user.admin.alice.tar.zst', 'returns the full archive path');
 
 $bobBackup = $plugin->repository()->findAdminBackup($archive, $adminDir, 'bob');
 $t->ok($bobBackup !== null, 'finds a .tar.gz backup');
@@ -446,10 +692,36 @@ $t->ok($plugin->repository()->findAdminBackup($archive, '/home/admin/wrong', 'al
 // A username must not be able to reach a neighbouring file by partial match.
 $t->ok($plugin->repository()->findAdminBackup($archive, $adminDir, 'alic') === null, 'does not match on a partial username');
 
+$t->group('Finding a DirectAdmin backup by its real filename');
+
+$adminDir = $plugin->config()->load()->adminBackupsDir();
+$backupEntries = $plugin->repository()->listDirectory($archive, $adminDir)->entries;
+
+$t->is(
+    Repository::pickAdminBackup($backupEntries, 'alice')?->name,
+    'user.admin.alice.tar.zst',
+    'DirectAdmin\'s <level>.<creator>.<user> naming is matched'
+);
+$t->is(
+    Repository::pickAdminBackup($backupEntries, 'bob')?->name,
+    'bob.tar.gz',
+    'so is the plain <user> naming'
+);
+
+// The one that matters: "user.admin.beaujean.tar.zst" ends with
+// "jean.tar.zst". Without the dot before the username, user "jean" would be
+// handed another customer's databases.
+$t->is(
+    Repository::pickAdminBackup($backupEntries, 'jean')?->name,
+    'user.admin.jean.tar.zst',
+    'a username that is a suffix of another account gets its own backup'
+);
+$t->is(Repository::pickAdminBackup($backupEntries, 'nobody'), null, 'an account with no backup returns nothing');
+
 $t->group('Restoring a whole user');
 
 $restoreUser = static function (string $username, string $destination = '/home/admin/borg_restore') use ($t, $archive, $plugin) {
-    return $t->page('admin', 'admin', ['tab' => 'archives', 'archive' => $archive], [
+    return $t->page('admin', 'admin', ['tab' => 'archives', 'archive' => $archive, 'user' => $username], [
         'action'      => 'restore_user',
         'archive'     => $archive,
         'username'    => $username,
@@ -460,15 +732,15 @@ $restoreUser = static function (string $username, string $destination = '/home/a
 
 $out = $restoreUser('alice');
 $t->contains($out, 'Restoring alice', 'a restore-a-user run starts for an existing account');
-$t->contains($out, 'alice.tar.zst', 'the DirectAdmin backup is included alongside the home directory');
+$t->contains($out, 'user.admin.alice.tar.zst', 'the DirectAdmin backup is included alongside the home directory');
 
 $latest = $plugin->jobs()->recent(1)[0];
 $t->is($latest->type(), Job::TYPE_RESTORE, 'it queues a restore job');
-$t->is($latest->params()['paths'], ['/home/alice', '/home/admin/admin_backups/alice.tar.zst'], 'the job restores both the home and the DirectAdmin backup');
+$t->is($latest->params()['paths'], ['/home/alice', '/home/admin/admin_backups/user.admin.alice.tar.zst'], 'the job restores both the home and the DirectAdmin backup');
 $t->is($latest->params()['restore_user'] ?? null, 'alice', 'the job records which user it is for');
 
 $t->ok($t->waitForJob($plugin, $latest->id, 180)?->status() === Job::STATUS_SUCCESS, 'the user restore completes');
-$t->ok(is_file('/home/admin/borg_restore/home/admin/admin_backups/alice.tar.zst'), 'the DirectAdmin backup lands on disk');
+$t->ok(is_file('/home/admin/borg_restore/home/admin/admin_backups/user.admin.alice.tar.zst'), 'the DirectAdmin backup lands on disk');
 $t->ok(is_dir('/home/admin/borg_restore/home/alice/domains'), 'the home directory lands on disk');
 
 $t->group('Restoring a user DirectAdmin does not have');
@@ -482,7 +754,7 @@ $t->contains($out, 'Restore ghost', 'the admin-backup-only action is offered');
 $t->contains($out, 'Restore Backups', 'the numbered recovery sequence is shown');
 
 // That action is explicit: it only happens when the operator asks for it.
-$out = $t->page('admin', 'admin', ['tab' => 'archives', 'archive' => $archive], [
+$out = $t->page('admin', 'admin', ['tab' => 'archives', 'archive' => $archive, 'user' => 'ghost'], [
     'action'      => 'restore_admin_backup',
     'archive'     => $archive,
     'username'    => 'ghost',
@@ -688,11 +960,11 @@ $t->contains($out, 'Databases and account configuration', 'the warning says what
 
 $t->group('User level cannot reach admin backups');
 
-$t->notContains($t->page('user', 'alice', ['archive' => $archive, 'path' => '/home/admin/admin_backups']), 'alice.tar.zst', 'a customer cannot browse the admin backups');
+$t->notContains($t->page('user', 'alice', ['archive' => $archive, 'path' => '/home/admin/admin_backups']), 'user.admin.alice.tar.zst', 'a customer cannot browse the admin backups');
 $out = $t->page('user', 'alice', [], [
     'action'     => 'restore',
     'archive'    => $archive,
-    'paths'      => ['/home/admin/admin_backups/alice.tar.zst'],
+    'paths'      => ['/home/admin/admin_backups/user.admin.alice.tar.zst'],
     'csrf_token' => (new CsrfTokenizer($plugin->paths, $plugin->filesystem()))->token(PluginRequest::LEVEL_USER, 'alice'),
 ], 'POST');
 $t->contains($out, 'outside the permitted directory', 'a customer cannot restore their own admin backup');

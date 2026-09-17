@@ -61,15 +61,15 @@ final class ConfigConstraints
                     message: 'Admin backups directory must be a single line.',
                 ),
             ],
-            'user_restore_dir' => [
-                new Assert\NotBlank(message: 'Restore directory must not be empty.'),
+            'archive_date_format' => [
+                new Assert\Type('string'),
                 new Assert\Regex(
-                    // A single path segment: a slash or ".." here would move
-                    // user restores outside the home directory.
-                    pattern: '/^(?!\.\.?$)[A-Za-z0-9._-]+$/',
-                    message: 'Restore directory must be a single name using letters, digits, dot, dash or underscore.',
+                    pattern: '/[\r\n\0]/',
+                    match: false,
+                    message: 'Archive date format must be a single line.',
                 ),
             ],
+            'index_files'          => [new Assert\Type('bool')],
             'restore_admin_backup' => [new Assert\Type('bool')],
             'user_restore_enabled' => [new Assert\Type('bool')],
         ];

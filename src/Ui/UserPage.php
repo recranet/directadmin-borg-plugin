@@ -6,6 +6,7 @@ namespace Recranet\DirectAdminBorg\Ui;
 
 use Recranet\DirectAdminBorg\Borg\Archive;
 use Recranet\DirectAdminBorg\Borg\ArchiveEntry;
+use Recranet\DirectAdminBorg\Borg\ArchiveName;
 use Recranet\DirectAdminBorg\Exception\BorgPluginException;
 use Recranet\DirectAdminBorg\Http\PluginRequest;
 use Recranet\DirectAdminBorg\Job\Job;
@@ -147,7 +148,7 @@ final class UserPage
         // Archive names come from the request, so check against the repository
         // rather than passing an arbitrary string to borg.
         $archive = $this->request->body()->getString('archive');
-        if ($archive === '' || !isset($this->archiveIndex()[$archive])) {
+        if ($archive === '' || !isset($this->archiveTimes()[$archive])) {
             throw new BorgPluginException('Unknown archive.');
         }
 
@@ -197,7 +198,10 @@ final class UserPage
         return [
             'error'    => null,
             'archives' => array_map(
-                static fn (Archive $a) => ['name' => $a->name, 'time' => $a->time],
+                static fn (Archive $a) => [
+                    'name'     => $a->name,
+                    'taken_at' => ArchiveName::date($a->name) ?? $a->time,
+                ],
                 \array_slice($listing['archives'], 0, 60)
             ),
         ];
@@ -206,7 +210,7 @@ final class UserPage
     /** @return array<string,mixed> */
     private function browserContext(string $archive, Account $account): array
     {
-        if (!isset($this->archiveIndex()[$archive])) {
+        if (!isset($this->archiveTimes()[$archive])) {
             $this->flash->error('Unknown archive.');
 
             return ['archive' => $archive, 'missing' => true, 'entries' => [], 'crumbs' => [], 'truncated' => false,
@@ -223,12 +227,21 @@ final class UserPage
             $path = $account->home;
         }
 
-        $listing = $this->plugin->repository()->listDirectory($archive, $path);
         $config = $this->plugin->config()->load();
+        $index = $this->plugin->archiveIndex();
+
+        // Use the index when an admin has built one -- instant, and the same
+        // view the admin gets. Without it, fall back to asking borg for this
+        // one subtree: slower, but a customer should not have to wait for an
+        // administrator to index an archive before they can restore from it.
+        // The path is already confined to their home, so the scan is bounded.
+        $listing = $index->exists($archive)
+            ? $index->listDirectory($archive, $path)
+            : $this->plugin->repository()->listDirectory($archive, $path);
 
         return [
             'archive'     => $archive,
-            'taken_at'    => $this->archiveIndex()[$archive],
+            'taken_at'    => $this->archiveTimes()[$archive],
             'path'        => $path,
             'missing'     => !$listing->readable && $listing->isEmpty(),
             'entries'     => array_map([$this, 'entryToArray'], $listing->entries),
@@ -282,7 +295,7 @@ final class UserPage
     }
 
     /** @return array<string,string> */
-    private function archiveIndex(): array
+    private function archiveTimes(): array
     {
         if ($this->archiveIndex === null) {
             $this->archiveIndex = [];

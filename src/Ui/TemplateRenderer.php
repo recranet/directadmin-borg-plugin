@@ -48,6 +48,8 @@ final class TemplateRenderer
         $this->twig->addFilter(new TwigFilter('bytes', [Format::class, 'bytes']));
         $this->twig->addFilter(new TwigFilter('datetime', [Format::class, 'dateTime']));
         $this->twig->addFilter(new TwigFilter('age', [Format::class, 'age']));
+        $this->twig->addFilter(new TwigFilter('date_only', [Format::class, 'date']));
+        $this->twig->addFilter(new TwigFilter('time_only', [Format::class, 'time']));
     }
 
     /** @param callable(array<string,scalar>):string $generator */

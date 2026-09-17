@@ -15,8 +15,9 @@ final class Job
 
     public const TYPE_CHECK = 'check';
     public const TYPE_RESTORE = 'restore';
+    public const TYPE_INDEX = 'index';
 
-    public const TYPES = [self::TYPE_CHECK, self::TYPE_RESTORE];
+    public const TYPES = [self::TYPE_CHECK, self::TYPE_RESTORE, self::TYPE_INDEX];
 
     /**
      * Types that take the repository lock and must not overlap.

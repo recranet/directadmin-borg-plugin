@@ -181,8 +181,12 @@ Two things there decide what you can restore, so they are worth checking:
 
 - **`/home` must be included**, or there is nothing to give a customer back.
 - **DirectAdmin's own per-user backups must be included.** Databases are not in
-  a home directory; DirectAdmin dumps them into `/home/admin/admin_backups/`,
-  which `/home` covers — but only once a DirectAdmin backup run has happened.
+  a home directory; DirectAdmin dumps them into its backups directory —
+  `/home/admin/admin_backups/` by default, but often somewhere else entirely,
+  such as `/mnt/bigstorage/directadmin/`. Wherever it is, it has to be in the
+  archive, and the plugin has to be told where under **Repository → DirectAdmin
+  backups directory**. The files are named `<level>.<creator>.<user>.tar.zst`
+  (`user.admin.alice.tar.zst`); the plain `<user>.tar.zst` form is accepted too.
   Restoring a whole account needs both, from the same archive.
 
 ### What a borg "version" is
@@ -219,18 +223,74 @@ it and no code path to it. This is on purpose: the plugin cannot know which
 archives in a shared repository belong to which producer, and deleting the wrong
 one is not recoverable.
 
+### Browsing an archive
+
+borg 1.x cannot list one directory. `borg list` walks the whole item metadata
+stream however little you ask it for, so every directory click costs a full
+scan — seventeen seconds on a 2.5-million-entry archive — and asking for the
+root without a path makes borg print all 2.5 million entries, which is ~880 MB
+and enough to kill the page.
+
+So an archive is scanned **once**, in the background, and the result is written
+to disk. Open an unindexed archive and the plugin offers to do it, with live
+progress under Jobs; afterwards every directory in that archive opens in about
+150 ms. Archives are immutable, so an index never needs rebuilding, and one is
+discarded automatically when its archive is pruned away.
+
+By default the index records the **directory tree only**. On a real hosting
+server files outnumber directories five to one — 2,116,438 against 408,851 —
+so skipping them makes the index a fraction of the size and builds it sooner.
+It costs nothing in what can be recovered: restoring a directory extracts
+everything inside it whether or not the index ever listed the individual files.
+What it costs is the ability to tick one file out of a directory, which is what
+**Index individual files as well as directories** turns back on, per archive or
+as the default. Symlinks are always indexed — there are few of them, and one is
+usually `public_html` pointing somewhere unexpected.
+
+The index lives in `/var/lib/directadmin-borg/index/` as a bytewise-sorted,
+tab-separated file per archive, looked up by binary search over byte offsets.
+Not SQLite: plugin scripts run on `php -n`, where no extension is guaranteed to
+be loaded. The only outside tool is `sort(1)`.
+
+A customer browsing at User Level uses the index when one exists and otherwise
+falls back to asking borg for their own subtree — slower, but they should not
+have to wait for an administrator before they can restore.
+
 ### Restores
 
-**Admin** can restore any path from any archive to any destination. Restores
-never overwrite in place: files are written below the chosen directory keeping
-their full original path, so `/home/alice/x` lands at
-`<destination>/home/alice/x`. Restoring straight onto `/`, `/etc`, `/usr`,
-`/home` and similar is refused — stage it and move the files deliberately.
+Opening an archive lists the **accounts** in it, not its filesystem root. The
+root of a DirectAdmin backup is `home` and `etc`; neither is somewhere anyone
+wants to be, and getting from there to a customer is four clicks through
+directories with one interesting child each. Accounts DirectAdmin no longer has
+are marked, because that is a different recovery — DirectAdmin must recreate the
+account from its own backup before a home directory means anything.
 
-**Users** browse their own home directory at a chosen backup date and restore
-into `/home/<user>/borg_restore/`, chowned back to them. Their live files are
-never touched. Turn the whole feature off with **Repository → Let users restore
-their own files**.
+Picking an account offers the two things that actually get asked for:
+
+- **Restore Domains** — websites, back into `/home/<user>/domains`
+- **Restore Email** — mailboxes, back into `/home/<user>/imap`
+
+Both restore **in place**, to the path the files came from, with their original
+ownership. There is no destination to choose: restoring `/home/alice/domains`
+anywhere else produces a copy that then has to be moved by hand with the right
+ownership, which is not finishing the job. Each subtree is checked against the
+account's home before the job is queued, so "in place" cannot be talked into
+meaning somewhere else.
+
+**Restore Domains** can delete the directory first, for a compromised site: a
+restore only adds and overwrites, so a webshell added since the backup survives
+one. It is never implied — you tick it and type the username.
+
+**Restore the whole account** adds the DirectAdmin backup holding the databases
+and account configuration. **Browse files** is still there underneath, scoped to
+that account, for the one file a customer deleted.
+
+**Users**, at User Level, browse their own home directory at a chosen backup date
+and restore into `/home/<user>/borg_restore/`, chowned back to them. That one is
+deliberately *not* in place, and the directory is not configurable: a customer
+clicking "restore" is not making the same considered decision an administrator
+is, and there is no undo. Turn the feature off with **Repository → Let users
+restore their own files**.
 
 ### Restoring a whole user
 
@@ -294,8 +354,10 @@ is there now, and anything created since the backup is left alone. borg cannot
 delete files during an extract. For a freshly recreated account the home is
 effectively empty, so the result is exact.
 
-Leave *“Restore to the original location”* unticked to get a staging copy under
-`/home/admin/borg_restore/` instead and inspect it before committing.
+If a restore setting changes after an archive was indexed — the DirectAdmin
+backups directory, say — the archive list marks it **needs refresh** and offers
+a button, because the old index would otherwise report that an account has no
+DirectAdmin backup when it has one somewhere the index was never told to look.
 
 #### If the account no longer exists
 
@@ -349,7 +411,8 @@ admin/, user/            DirectAdmin entry points (index.html, status.raw, menu.
 bin/console              Symfony Console app: detached worker, diagnostics
 hooks/                   classic-skin menu fragments
 src/
-  Borg/                  borg CLI wrapper and read-only repository operations
+  Borg/                  borg CLI wrapper, read-only repository operations,
+                         the archive index and archive-name parsing
   Config/                configuration, validation constraints
   Http/                  DirectAdmin request decoding, JSON status endpoint
   Job/                   job records, dispatch, execution (restore and check)
@@ -374,7 +437,12 @@ directory: an update must not silently leave the plugin pointing at nothing.
   logs/            0700   one log per job
   locks/           0700   repository lock
   cache/           0700   compiled templates
+  index/           0700   one sorted index per archive, built on demand
 ```
+
+The index is the only thing here that can get large: roughly 67 MB per archive
+for the directory tree of a 2.5-million-entry backup, or several times that
+with files included. It is disposable — deleting it costs one rescan.
 
 ### Which Symfony components, and why
 
@@ -509,6 +577,15 @@ real environment:
 - a **remote** repository over `ssh://`, against an sshd in the container,
   including that a wrong `BORG_RSH` is caught at save time
 - `uninstall.sh`, including clearing a schedule left behind by a 1.x install
+- that listing is **streamed**, so peak memory does not scale with the archive:
+  the regression guard asserts memory barely moves while a cap is applied to
+  output borg would otherwise have printed in full
+- the archive index end to end — that it returns exactly what borg returns, that
+  a directory-only index omits files but keeps directories and symlinks, and the
+  cases a binary search gets wrong: the root, a deep path, a missing directory,
+  and a sibling with a shared prefix
+- archive-name date parsing, including names with no date, dates that are not
+  the suffix, and impossible dates like `2026-13-45`
 - job retention, oversized directory listings, and log tailing past 64 KB
 
 ---

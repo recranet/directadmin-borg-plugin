@@ -85,6 +85,18 @@ final class Paths
         return $this->dataDir . '/locks';
     }
 
+    /**
+     * Where archive indexes live.
+     *
+     * Not under cacheDir(): a compiled template is disposable and small, an
+     * index is neither. It costs a full archive scan to rebuild and can run to
+     * hundreds of megabytes, so it wants its own directory and its own purge.
+     */
+    public function indexDir(): string
+    {
+        return $this->dataDir . '/index';
+    }
+
     public function cacheDir(): string
     {
         return $this->dataDir . '/cache';
@@ -102,7 +114,7 @@ final class Paths
 
     public function ensure(Filesystem $filesystem): void
     {
-        foreach ([$this->dataDir, $this->jobsDir(), $this->logsDir(), $this->locksDir(), $this->cacheDir()] as $dir) {
+        foreach ([$this->dataDir, $this->jobsDir(), $this->logsDir(), $this->locksDir(), $this->cacheDir(), $this->indexDir()] as $dir) {
             $filesystem->mkdir($dir, 0700);
         }
         $filesystem->chmod($this->dataDir, 0700);

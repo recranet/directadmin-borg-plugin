@@ -5,122 +5,114 @@
             <a href="{{ url({ tab: 'repository' }) }}">Repository</a>.
         </p>
     </div>
-{% elseif browser %}
-    {% if user_restore %}
+{% elseif browser or accounts or user_panel %}
+    {% if accounts %}
         <div class="borg-card">
-            <h2>Restore a whole user</h2>
-
+            <h2>Accounts in this backup ({{ accounts.accounts|length }})</h2>
             <p class="borg-note" style="margin-top:0">
-                Restores the account's home directory together with its DirectAdmin backup
-                from <span class="borg-mono">{{ user_restore.admin_backups_dir }}</span>,
-                which holds the databases and account configuration.
+                Pick the account you need to put back.
             </p>
 
-            <form method="post" action="{{ url({ tab: 'archives', archive: user_restore.archive }) }}">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <input type="hidden" name="action" value="restore_user">
-                <input type="hidden" name="archive" value="{{ user_restore.archive }}">
-
-                <div class="borg-inline">
-                    <div class="borg-field">
-                        <label for="borg-username">Username</label>
-                        <input type="text" id="borg-username" name="username" value="{{ user_restore.username }}"
-                               style="max-width:220px" autocapitalize="off" autocorrect="off" spellcheck="false">
-                    </div>
-                    <div class="borg-field" style="flex:1;min-width:260px">
-                        <label for="borg-user-destination">Restore into</label>
-                        <input type="text" id="borg-user-destination" name="destination"
-                               value="{{ user_restore.default_destination }}">
-                    </div>
+            {% if accounts.accounts is empty %}
+                <p class="borg-empty">This archive has no <span class="borg-mono">/home</span> in it.</p>
+            {% else %}
+                <div class="borg-scroll">
+                    <table class="borg-table">
+                        <thead><tr><th>Account</th><th>In DirectAdmin</th></tr></thead>
+                        <tbody>
+                            {% for account in accounts.accounts %}
+                                <tr>
+                                    <td>
+                                        <a class="borg-date" href="{{ url({ tab: 'archives', archive: accounts.archive, user: account.name }) }}">
+                                            {% include 'partial/user_icon.html.twig' %}
+                                            {{ account.name }}
+                                        </a>
+                                    </td>
+                                    <td>
+                                        {% if account.exists %}
+                                            <span class="borg-badge borg-badge-ok">present</span>
+                                        {% else %}
+                                            {# The deleted-account case, which needs DirectAdmin's
+                                               own restore before files mean anything. #}
+                                            <span class="borg-badge borg-badge-warn">deleted</span>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
                 </div>
-
-                <div class="borg-field">
-                    <label><input type="checkbox" name="in_place" value="1">Restore to the original location instead</label>
-                    <span class="borg-hint">
-                        Writes straight into the account's home directory and
-                        <span class="borg-mono">{{ user_restore.admin_backups_dir }}</span>, ignoring the staging
-                        path above. Existing files are <strong>overwritten</strong>; files created since the
-                        backup are left in place, so this is an overlay rather than an exact mirror.
-                    </span>
-                </div>
-
-                <div class="borg-field" style="border-left:3px solid var(--borg-err);padding-left:12px">
-                    <label><input type="checkbox" name="clean_first" value="1">Delete the site directory first (malware cleanup)</label>
-                    <span class="borg-hint">
-                        A restore normally only adds and overwrites, so a webshell the attacker left behind
-                        survives it. Tick this to delete the directory below before restoring, so nothing
-                        outside the archive is left. Requires <strong>Restore to the original location</strong>.
-                    </span>
-
-                    <div class="borg-inline" style="margin-top:10px">
-                        <div class="borg-field">
-                            <label for="borg-clean-dir">Directory to delete</label>
-                            <input type="text" id="borg-clean-dir" name="clean_dir" value="domains" style="max-width:280px">
-                            <span class="borg-hint">
-                                Relative to the account's home. Delete the whole
-                                <span class="borg-mono">domains/example.com</span> rather than just
-                                <span class="borg-mono">public_html</span> &mdash; if public_html is a symlink into a
-                                repository beside it, removing the link leaves the real files, malware included.
-                            </span>
-                        </div>
-                        <div class="borg-field">
-                            <label for="borg-clean-confirm">Type the username to confirm</label>
-                            <input type="text" id="borg-clean-confirm" name="clean_confirm" value=""
-                                   style="max-width:220px" autocapitalize="off" autocorrect="off" spellcheck="false">
-                        </div>
-                    </div>
-                </div>
-
-                <div class="borg-actions">
-                    <button class="borg-btn borg-btn-primary" type="submit">Restore user</button>
-                </div>
-            </form>
-
-            {% if user_restore.missing_account %}
-                {# The account is gone, so its home cannot be restored yet. The
-                   DirectAdmin backup is what recreates it, so offer just that,
-                   as an explicit choice rather than something done for them. #}
-                <form method="post" action="{{ url({ tab: 'archives', archive: user_restore.archive }) }}"
-                      style="margin-top:12px">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                    <input type="hidden" name="action" value="restore_admin_backup">
-                    <input type="hidden" name="archive" value="{{ user_restore.archive }}">
-                    <input type="hidden" name="username" value="{{ user_restore.missing_account }}">
-                    <input type="hidden" name="destination" value="{{ user_restore.default_destination }}">
-
-                    <p class="borg-note" style="margin-top:0">
-                        This plugin does not create accounts. To bring
-                        <span class="borg-mono">{{ user_restore.missing_account }}</span> back:
-                    </p>
-                    <ol class="borg-note" style="margin-top:4px">
-                        <li>Restore its DirectAdmin backup into
-                            <span class="borg-mono">{{ user_restore.admin_backups_dir }}</span> with the button below.</li>
-                        <li>Recreate the account from it with <strong>Admin Level &rarr; Restore Backups</strong>.
-                            That is what creates the user, its databases and its configuration.</li>
-                        <li>Come back to this archive and restore the home directory.</li>
-                    </ol>
-
-                    <div class="borg-field">
-                        <label>
-                            <input type="checkbox" name="to_directadmin" value="1" checked>
-                            Place it in {{ user_restore.admin_backups_dir }} where DirectAdmin looks for it
-                        </label>
-                        <span class="borg-hint">
-                            Restored with its original ownership, which DirectAdmin requires of these files.
-                            Untick to write it to the staging path instead and move it yourself.
-                        </span>
-                    </div>
-
-                    <button class="borg-btn borg-btn-primary" type="submit">
-                        Restore {{ user_restore.missing_account }}'s DirectAdmin backup
-                    </button>
-                </form>
             {% endif %}
+
+            <div class="borg-actions">
+                <a class="borg-btn" href="{{ url({ tab: 'archives' }) }}">Back to archives</a>
+            </div>
         </div>
     {% endif %}
 
+    {% if user_panel %}
+        {% include 'admin/_account_panel.html.twig' %}
+    {% endif %}
+
+    {% if browser and browser.needs_index %}
+        <div class="borg-card">
+            <h2>Index this archive first</h2>
+
+            <p class="borg-mono" style="margin-top:0">{{ browser.archive }}</p>
+
+            <p>
+                borg cannot list a single directory: it reads the whole archive however
+                little you ask for. On a hosting server that is millions of entries, so
+                browsing straight through borg would cost a full scan on every click.
+            </p>
+            <p>
+                Indexing reads the archive once, in the background, and writes what it
+                finds to disk. After that every directory in this archive opens
+                immediately. It only has to happen once &mdash; archives never change.
+            </p>
+
+            {% if not browser.index_job %}
+                <form method="post" action="{{ url({ tab: 'archives', archive: browser.archive }) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="action" value="build_index">
+                    <input type="hidden" name="archive" value="{{ browser.archive }}">
+
+                    <div class="borg-field">
+                        <label>
+                            <input type="checkbox" name="index_files" value="1"{{ browser.index_default_files ? ' checked' : '' }}>
+                            Index individual files as well as directories
+                        </label>
+                        <span class="borg-hint">
+                            Off by default. Files outnumber directories several times over, so
+                            leaving this off makes the index a fraction of the size and builds it
+                            sooner. It does not change what you can recover: restoring a directory
+                            brings back everything inside it either way. Turn it on when you need
+                            to pick out single files rather than whole folders.
+                        </span>
+                    </div>
+
+                    <div class="borg-actions">
+                        <button class="borg-btn borg-btn-primary" type="submit">Index this archive</button>
+                        <a class="borg-btn" href="{{ url({ tab: 'archives', archive: browser.archive, user: browser.username }) }}">Back to {{ browser.username }}</a>
+                    </div>
+                </form>
+            {% endif %}
+        </div>
+
+        {% if browser.index_job %}
+            {# Live progress: the page reloads itself when the scan finishes. #}
+            {% include 'partial/job_detail.html.twig' with {
+                job: browser.index_job,
+                log: browser.index_log,
+                status_url: browser.index_status_url,
+                heading: 'Indexing in progress',
+                show_type: false,
+                back_url: url({ tab: 'archives' })
+            } only %}
+        {% endif %}
+    {% elseif browser %}
     <div class="borg-card">
-        <h2>{{ browser.archive }}</h2>
+        <h2>{{ browser.path }}</h2>
 
         {% include 'partial/breadcrumbs.html.twig' with { crumbs: browser.crumbs } %}
 
@@ -134,11 +126,36 @@
                 </div>
             {% endif %}
 
+            {% if not browser.has_files %}
+                {# Saying so matters: an empty-looking folder here is not an
+                   empty folder in the archive, and restoring it still works. #}
+                <div class="borg-alert borg-alert-warn">
+                    This archive is indexed by directory only, so individual files are not
+                    listed. Selecting a directory still restores everything inside it.
+                    <form method="post" action="{{ url({ tab: 'archives', archive: browser.archive, path: browser.path }) }}"
+                          style="display:inline">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <input type="hidden" name="action" value="build_index">
+                        <input type="hidden" name="archive" value="{{ browser.archive }}">
+                        <input type="hidden" name="index_files" value="1">
+                        <button class="borg-btn" type="submit" style="margin-top:8px">Re-index with files</button>
+                    </form>
+                </div>
+            {% endif %}
+
             {% if browser.entries is empty %}
-                <p class="borg-empty">This directory is empty in the archive.</p>
-                <a class="borg-btn" href="{{ url({ tab: 'archives' }) }}">Back to archives</a>
+                <p class="borg-empty">
+                    {% if browser.has_files %}
+                        This directory is empty in the archive.
+                    {% else %}
+                        No subdirectories here. This archive is indexed by directory only, so any
+                        files in this directory are not shown &mdash; restore the directory above
+                        to get them.
+                    {% endif %}
+                </p>
+                <a class="borg-btn" href="{{ url({ tab: 'archives', archive: browser.archive, user: browser.username }) }}">Back to {{ browser.username }}</a>
             {% else %}
-                <form method="post" action="{{ url({}) }}">
+                <form method="post" action="{{ url({ tab: 'archives', archive: browser.archive, user: browser.username, path: browser.path }) }}">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                     <input type="hidden" name="action" value="restore">
                     <input type="hidden" name="archive" value="{{ browser.archive }}">
@@ -154,7 +171,7 @@
                                         <td><input type="checkbox" name="paths[]" value="{{ entry.path }}"></td>
                                         <td class="borg-mono">
                                             {% if entry.directory %}
-                                                <a href="{{ url({ tab: 'archives', archive: browser.archive, path: entry.path }) }}">{{ entry.name }}/</a>
+                                                <a href="{{ url({ tab: 'archives', archive: browser.archive, user: browser.username, path: entry.path }) }}">{{ entry.name }}/</a>
                                             {% else %}
                                                 {{ entry.name }}
                                             {% endif %}
@@ -169,24 +186,24 @@
                         </table>
                     </div>
 
-                    <div class="borg-field" style="margin-top:14px">
-                        <label for="borg-destination">Restore into</label>
-                        <input type="text" id="borg-destination" name="destination" value="{{ browser.default_destination }}">
-                        <span class="borg-hint">
-                            Files are written below this directory, keeping their full original path.
-                            Existing files there are overwritten, so restore into a staging directory
-                            rather than straight over live data.
-                        </span>
-                    </div>
+                    <input type="hidden" name="username" value="{{ browser.username }}">
+
+                    <p class="borg-note">
+                        Selected items go back to where they came from under
+                        <span class="borg-mono">/home/{{ browser.username }}</span>, with their
+                        original ownership. Files of the same name are overwritten; nothing else
+                        in the directory is touched.
+                    </p>
 
                     <div class="borg-actions">
                         <button class="borg-btn borg-btn-primary" type="submit">Restore selected</button>
-                        <a class="borg-btn" href="{{ url({ tab: 'archives' }) }}">Back to archives</a>
+                        <a class="borg-btn" href="{{ url({ tab: 'archives', archive: browser.archive, user: browser.username }) }}">Back to {{ browser.username }}</a>
                     </div>
                 </form>
             {% endif %}
         {% endif %}
     </div>
+    {% endif %}
 {% elseif error %}
     <div class="borg-alert borg-alert-err">Could not list archives: {{ error }}</div>
 {% elseif archives is empty %}
@@ -199,17 +216,41 @@
 {% else %}
     <div class="borg-card">
         <h2>Archives ({{ archives|length }})</h2>
+
         <div class="borg-scroll">
             <table class="borg-table">
-                <thead><tr><th>Archive</th><th>Created</th><th>Age</th></tr></thead>
+                <thead><tr><th>Date</th><th>Time</th><th>Browsing</th><th></th></tr></thead>
                 <tbody>
                     {% for archive in archives %}
                         <tr>
-                            <td class="borg-mono">
-                                <a href="{{ url({ tab: 'archives', archive: archive.name }) }}">{{ archive.name }}</a>
+                            <td>
+                                <a class="borg-date" href="{{ url({ tab: 'archives', archive: archive.name }) }}">
+                                    {% include 'partial/calendar_icon.html.twig' %}
+                                    {{ archive.taken_at|date_only }}
+                                </a>
                             </td>
-                            <td>{{ archive.time|datetime }}</td>
-                            <td>{{ archive.time|age }}</td>
+                            <td class="borg-num">{{ archive.taken_at|time_only }}</td>
+                            <td>
+                                {% if archive.stale %}
+                                    {# Built before a setting changed, so it no longer answers
+                                       the question the restore screen asks of it. #}
+                                    <span class="borg-badge borg-badge-warn">needs refresh</span>
+                                {% elseif archive.indexed %}
+                                    <span class="borg-badge borg-badge-ok">indexed</span>
+                                {% else %}
+                                    <span class="borg-badge borg-badge-idle">not indexed</span>
+                                {% endif %}
+                            </td>
+                            <td class="borg-num">
+                                {% if archive.indexed %}
+                                    <form method="post" action="{{ url({ tab: 'archives' }) }}" style="display:inline">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                        <input type="hidden" name="action" value="build_index">
+                                        <input type="hidden" name="archive" value="{{ archive.name }}">
+                                        <button class="borg-btn{{ archive.stale ? ' borg-btn-primary' : '' }}" type="submit">Refresh</button>
+                                    </form>
+                                {% endif %}
+                            </td>
                         </tr>
                     {% endfor %}
                 </tbody>

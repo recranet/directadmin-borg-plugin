@@ -89,17 +89,10 @@
                 Let users restore their own files
             </label>
             <span class="borg-hint">
-                Adds a Restore Files entry at User Level, scoped to the account's own home directory.
-            </span>
-        </div>
-
-        <div class="borg-field">
-            <label for="borg-user-restore-dir">User restore directory</label>
-            <input type="text" id="borg-user-restore-dir" name="user_restore_dir"
-                   value="{{ config.user_restore_dir }}" style="max-width:280px">
-            <span class="borg-hint">
-                A single directory name, created inside the user's home. Restores from User Level
-                always land here rather than over live files.
+                Adds a Restore Files entry at User Level, scoped to the account's own home
+                directory. Their restores land in <code>~/{{ user_restore_dir }}</code> and never
+                over their live files &mdash; unlike the restores on this screen, which put files
+                back where they came from.
             </span>
         </div>
     </div>

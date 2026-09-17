@@ -147,16 +147,12 @@ final class ConfigRepository
      */
     private function coerce(array $values): array
     {
-        foreach (['restore_admin_backup', 'user_restore_enabled'] as $key) {
+        foreach (['restore_admin_backup', 'user_restore_enabled', 'index_files'] as $key) {
             $values[$key] = $this->toBool($values[$key] ?? false);
         }
-        foreach (['repository', 'ssh_command', 'admin_backups_dir'] as $key) {
+        foreach (['repository', 'ssh_command', 'admin_backups_dir', 'archive_date_format'] as $key) {
             $values[$key] = trim((string) ($values[$key] ?? ''));
         }
-
-        // Trimmed of surrounding whitespace only; the constraint then rejects
-        // anything containing a slash, so it stays a single path segment.
-        $values['user_restore_dir'] = trim((string) ($values['user_restore_dir'] ?? ''), " \t");
 
         return $values;
     }

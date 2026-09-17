@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Recranet\DirectAdminBorg;
 
+use Recranet\DirectAdminBorg\Borg\ArchiveIndex;
 use Recranet\DirectAdminBorg\Borg\BorgRunner;
 use Recranet\DirectAdminBorg\Borg\Repository;
 use Recranet\DirectAdminBorg\Config\ConfigRepository;
@@ -91,6 +92,20 @@ final class Plugin
     public function repository(): Repository
     {
         return new Repository($this->borg(), $this->config()->load());
+    }
+
+    /**
+     * Not memoised, for the same reason as repository(): it is scoped to the
+     * configured repository, and a request that changes that must not keep
+     * reading the previous one's indexes.
+     */
+    public function archiveIndex(): ArchiveIndex
+    {
+        return new ArchiveIndex(
+            $this->paths,
+            $this->filesystem(),
+            $this->config()->load()->repository()
+        );
     }
 
     public function jobs(): JobRepository

@@ -43,6 +43,43 @@ final class Format
         }
     }
 
+    /**
+     * The date alone, spelled out.
+     *
+     * Archives are picked by "which day do I want back", so the list reads as
+     * dates rather than as timestamps. Written out in full because 09-08 is
+     * ambiguous between two continents and a restore is the wrong place to
+     * guess.
+     */
+    public static function date(mixed $isoTime): string
+    {
+        $isoTime = (string) $isoTime;
+        if (trim($isoTime) === '') {
+            return '-';
+        }
+
+        try {
+            return (new \DateTimeImmutable($isoTime))->format('j F Y');
+        } catch (\Throwable) {
+            return $isoTime;
+        }
+    }
+
+    /** The time of day alone, to sit beside date(). */
+    public static function time(mixed $isoTime): string
+    {
+        $isoTime = (string) $isoTime;
+        if (trim($isoTime) === '') {
+            return '-';
+        }
+
+        try {
+            return (new \DateTimeImmutable($isoTime))->format('H:i');
+        } catch (\Throwable) {
+            return '';
+        }
+    }
+
     public static function age(mixed $isoTime): string
     {
         $isoTime = (string) $isoTime;

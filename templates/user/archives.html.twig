@@ -11,12 +11,17 @@
 
         <div class="borg-scroll">
             <table class="borg-table">
-                <thead><tr><th>Backup date</th><th>Age</th></tr></thead>
+                <thead><tr><th>Date</th><th>Time</th></tr></thead>
                 <tbody>
                     {% for archive in archives %}
                         <tr>
-                            <td><a href="{{ url({ archive: archive.name, path: home }) }}">{{ archive.time|datetime }}</a></td>
-                            <td>{{ archive.time|age }}</td>
+                            <td>
+                                <a class="borg-date" href="{{ url({ archive: archive.name, path: home }) }}">
+                                    {% include 'partial/calendar_icon.html.twig' %}
+                                    {{ archive.taken_at|date_only }}
+                                </a>
+                            </td>
+                            <td class="borg-num">{{ archive.taken_at|time_only }}</td>
                         </tr>
                     {% endfor %}
                 </tbody>

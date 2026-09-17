@@ -37,9 +37,15 @@ chown -R bob:bob /home/bob
 # live in the home directory. Two compressions on purpose, since which one is
 # written depends on the server's backup settings.
 mkdir -p /home/admin/admin_backups
-echo 'alice config and databases'  > /home/admin/admin_backups/alice.tar.zst
-echo 'bob config and databases'    > /home/admin/admin_backups/bob.tar.gz
+# DirectAdmin writes these as <level>.<creator>.<user>.tar.<ext>. The plain
+# <user>.tar.<ext> form exists in some setups, so both shapes are here -- and
+# "beaujean" is here to catch a suffix match that forgets the leading dot and
+# hands back the wrong customer's databases for user "jean".
+echo 'alice config and databases'   > /home/admin/admin_backups/user.admin.alice.tar.zst
+echo 'bob config and databases'     > /home/admin/admin_backups/bob.tar.gz
 echo 'a user that no longer exists' > /home/admin/admin_backups/ghost.tar.gz
+echo 'beaujean config'              > /home/admin/admin_backups/user.admin.beaujean.tar.zst
+echo 'jean config'                  > /home/admin/admin_backups/user.admin.jean.tar.zst
 chown -R admin:admin /home/admin/admin_backups
 chmod 0700 /home/admin/admin_backups
 

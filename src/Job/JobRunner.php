@@ -67,6 +67,7 @@ final class JobRunner
             return match ($job->type()) {
                 Job::TYPE_CHECK   => $this->runCheck($job, $repository),
                 Job::TYPE_RESTORE => $this->runRestore($job, $config, $repository),
+                Job::TYPE_INDEX   => $this->runIndex($job, $repository),
                 default           => $this->finish($job, Job::STATUS_FAILED, 2, 'Unknown job type: ' . $job->type()),
             };
         } catch (\Throwable $e) {
@@ -92,6 +93,69 @@ final class JobRunner
             $result->exitCode,
             $result->isSuccessful() ? 'Repository check completed.' : $result->errorMessage()
         );
+    }
+
+    /**
+     * Build the browsable index for one archive.
+     *
+     * Slow by nature -- it is one pass over every entry in the archive -- which
+     * is exactly why it is a job: the work happens once, in the background,
+     * with progress in the log, instead of inside a page request that would
+     * time out or run out of memory.
+     */
+    private function runIndex(Job $job, Repository $repository): int
+    {
+        $archive = (string) ($job->params()['archive'] ?? '');
+        if ($archive === '') {
+            return $this->finish($job, Job::STATUS_FAILED, 2, 'Index job is missing an archive name.');
+        }
+
+        // Its own lock, not the repository one: indexing only reads, so it must
+        // not block a restore. What it must block is a second index of the same
+        // archive, which would have two processes writing one file.
+        $lock = $this->plugin->lockFactory()->createLock('borg-index-' . sha1($archive), 86400.0, false);
+        if (!$lock->acquire()) {
+            return $this->finish($job, Job::STATUS_FAILED, 75, 'This archive is already being indexed.');
+        }
+
+        $includeFiles = (bool) ($job->params()['files'] ?? false);
+
+        $this->log($job, \sprintf(
+            'Indexing %s (%s). This reads every entry in the archive once.',
+            $archive,
+            $includeFiles ? 'directories and files' : 'directory tree only'
+        ));
+
+        $index = $this->plugin->archiveIndex();
+
+        try {
+            $built = $index->build(
+                $repository,
+                $archive,
+                function (int $entries) use ($job): void {
+                    $this->log($job, \sprintf('  %s entries indexed…', number_format($entries)));
+                },
+                $includeFiles,
+                $this->plugin->config()->load()->adminBackupsDir()
+            );
+        } finally {
+            $lock->release();
+        }
+
+        if (!$built['result']->isSuccessful()) {
+            return $this->finish(
+                $job,
+                Job::STATUS_FAILED,
+                $built['result']->exitCode,
+                'Could not read the archive: ' . $built['result']->errorMessage()
+            );
+        }
+
+        return $this->finish($job, Job::STATUS_SUCCESS, 0, \sprintf(
+            'Indexed %s %s. Browsing this archive is now immediate.',
+            number_format($built['entries']),
+            $includeFiles ? 'entries' : 'directories and links'
+        ));
     }
 
     private function runRestore(Job $job, Configuration $config, Repository $repository): int

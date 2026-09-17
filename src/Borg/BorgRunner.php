@@ -155,6 +155,115 @@ final class BorgRunner
         );
     }
 
+    /**
+     * Run borg and hand stdout to a callback one line at a time.
+     *
+     * The difference from run() is memory, and it is not a small one: run()
+     * buffers the whole of stdout before anyone sees a byte of it. For
+     * `borg list` over a real hosting archive that is millions of lines --
+     * 2.5 million entries and ~880 MB on the server this was written against --
+     * and PHP dies on its memory limit after a minute of work. Nothing is
+     * retained here: each chunk is consumed and dropped as it arrives, so the
+     * peak is one chunk plus one line however large the archive is.
+     *
+     * $onLine may return false to stop early; the process is killed and the
+     * result is flagged as truncated.
+     *
+     * stderr is still collected, because it is how borg explains a failure, but
+     * it is capped: a repository that prints a warning per file would otherwise
+     * reintroduce exactly the problem this method exists to avoid.
+     *
+     * @param string[] $arguments
+     * @param callable $onLine    fn(string $line): bool
+     */
+    public function runStreaming(
+        array $arguments,
+        callable $onLine,
+        int $timeout = self::NO_TIMEOUT,
+    ): BorgResult {
+        $process = new Process(
+            array_merge([$this->binary], array_values(array_map('strval', $arguments))),
+            '/',
+            $this->environment(),
+            null,
+            $timeout > 0 ? (float) $timeout : null
+        );
+        $process->setInput('');
+
+        $stderr = '';
+        $pending = '';
+        $stopped = false;
+        $timedOut = false;
+
+        $consume = static function (string $line) use ($onLine, &$stopped): void {
+            if ($stopped) {
+                return;
+            }
+            if ($onLine($line) === false) {
+                $stopped = true;
+            }
+        };
+
+        try {
+            $process->start();
+
+            // The default iterator clears each chunk from the process buffer as
+            // it is yielded. ITER_KEEP_OUTPUT would retain it, which is the very
+            // thing being avoided.
+            foreach ($process as $type => $chunk) {
+                if ($type === Process::ERR) {
+                    // 64 KB is far more than borg ever needs to say what went
+                    // wrong, and bounds a pathological case.
+                    if (\strlen($stderr) < 65536) {
+                        $stderr .= $chunk;
+                    }
+                    continue;
+                }
+
+                $pending .= $chunk;
+
+                while (($newline = strpos($pending, "\n")) !== false) {
+                    $line = substr($pending, 0, $newline);
+                    $pending = substr($pending, $newline + 1);
+                    $consume($line);
+                }
+
+                if ($stopped) {
+                    $process->stop(1.0);
+                    $pending = '';
+                    break;
+                }
+            }
+
+            // A final line with no trailing newline.
+            if (!$stopped && $pending !== '') {
+                $consume($pending);
+            }
+        } catch (ProcessTimedOutException) {
+            $timedOut = true;
+            $process->stop(1.0);
+        }
+
+        $exitCode = $timedOut ? 124 : (int) $process->getExitCode();
+
+        // Killing the process ourselves is not a failure: we got what we asked
+        // for and hung up. Report it as success so the caller does not have to
+        // special-case a signal exit code.
+        if ($stopped) {
+            $exitCode = 0;
+        }
+
+        return new BorgResult(
+            $exitCode,
+            '',
+            $timedOut
+                ? trim($stderr . \sprintf("\nborg timed out after %ds.", $timeout))
+                : $stderr,
+            $process->getCommandLine(),
+            $timedOut
+        );
+    }
+
     /** @return array<string,string> */
     private function environment(): array
     {

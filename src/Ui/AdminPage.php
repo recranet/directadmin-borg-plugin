@@ -6,6 +6,7 @@ namespace Recranet\DirectAdminBorg\Ui;
 
 use Recranet\DirectAdminBorg\Borg\Archive;
 use Recranet\DirectAdminBorg\Borg\ArchiveEntry;
+use Recranet\DirectAdminBorg\Borg\ArchiveName;
 use Recranet\DirectAdminBorg\Borg\Repository;
 use Recranet\DirectAdminBorg\Config\Configuration;
 use Recranet\DirectAdminBorg\Exception\BorgPluginException;
@@ -118,8 +119,11 @@ final class AdminPage
             match ($this->request->action()) {
                 'save_repository'      => $this->saveRepository(),
                 'run_check'            => $this->startJob(Job::TYPE_CHECK),
+                'build_index'          => $this->buildIndex(),
                 'break_lock'           => $this->breakLock(),
                 'restore'              => $this->restore(),
+                'restore_domains'      => $this->restoreAccountTree('domains'),
+                'restore_email'        => $this->restoreAccountTree('imap'),
                 'restore_user'         => $this->restoreUser(),
                 'restore_admin_backup' => $this->restoreAdminBackupOnly(),
                 default                => $this->flash->error('Unknown action.'),
@@ -158,7 +162,6 @@ final class AdminPage
             'admin_backups_dir'    => $body->getString('admin_backups_dir'),
             'restore_admin_backup' => $this->request->bodyBool('restore_admin_backup'),
             'user_restore_enabled' => $this->request->bodyBool('user_restore_enabled'),
-            'user_restore_dir'     => $body->getString('user_restore_dir'),
         ]);
         foreach ($errors as $error) {
             $this->flash->error($error);
@@ -259,6 +262,36 @@ final class AdminPage
         $this->flash->success(\sprintf('%s started. Follow it under Jobs.', ucfirst($type)));
     }
 
+    /** Queue the one-off scan that makes an archive browsable. */
+    private function buildIndex(): void
+    {
+        if (!$this->ensureReady()) {
+            return;
+        }
+
+        $archive = $this->request->body()->getString('archive');
+        if ($archive === '') {
+            $this->flash->error('No archive selected.');
+
+            return;
+        }
+
+        // The form's checkbox wins; the configured default applies when the
+        // request did not come from that form.
+        $files = $this->request->body()->has('index_files')
+            ? $this->request->bodyBool('index_files')
+            : $this->plugin->config()->load()->indexFiles();
+
+        $job = $this->plugin->jobs()->create(
+            Job::TYPE_INDEX,
+            $this->request->username,
+            ['archive' => $archive, 'files' => $files]
+        );
+        $this->plugin->dispatcher()->dispatch($job);
+
+        $this->flash->success('Indexing started. Progress is shown below; this only has to happen once per archive.');
+    }
+
     private function breakLock(): void
     {
         if (!$this->ensureReady()) {
@@ -282,25 +315,123 @@ final class AdminPage
 
         $archive = $this->request->body()->getString('archive');
         $paths = $this->request->bodyList('paths');
+        $username = trim($this->request->body()->getString('username'));
 
         if ($archive === '' || $paths === []) {
             $this->flash->error('Select at least one item to restore.');
 
             return;
         }
-        if (trim($this->request->body()->getString('destination')) === '') {
-            $this->flash->error('A restore destination is required.');
+
+        // Reached through an account, so the selection goes back where it came
+        // from, like every other restore on this screen. Without an account --
+        // which the UI no longer produces, but a hand-made request could -- the
+        // old staging behaviour and its protected-destination list still apply.
+        if ($username === '') {
+            $destination = $this->restoreDestination();
+            $this->queueRestore($archive, $paths, $destination);
+
+            $this->flash->success(\sprintf(
+                'Restoring %d item(s) into %s. Follow it under Jobs.',
+                \count($paths),
+                $destination
+            ));
 
             return;
         }
 
-        $destination = $this->restoreDestination();
-        $this->queueRestore($archive, $paths, $destination);
+        try {
+            $account = Account::resolve($username, $this->plugin->paths);
+        } catch (\Throwable $e) {
+            $this->flash->error($e->getMessage());
+
+            return;
+        }
+
+        $this->queueRestore($archive, $paths, '/', $username, [$account->home]);
 
         $this->flash->success(\sprintf(
-            'Restoring %d item(s) into %s. Follow it under Jobs.',
+            'Restoring %d item(s) back into %s. Follow it under Jobs.',
             \count($paths),
-            $destination
+            $account->home
+        ));
+    }
+
+    /**
+     * Restore one of an account's two directories back over itself.
+     *
+     * These are the two requests that actually come in -- "the site is broken"
+     * and "the mail is gone" -- so they are one button each rather than a path
+     * to be typed. There is no destination field on purpose: restoring
+     * /home/alice/domains anywhere but /home/alice/domains produces a copy
+     * nobody asked for, which then has to be moved by hand with the right
+     * ownership. In place is the only answer that finishes the job.
+     *
+     * The subtree is still validated against the account's home before the job
+     * is queued, so "in place" cannot be talked into meaning somewhere else.
+     */
+    private function restoreAccountTree(string $subdirectory): void
+    {
+        if (!$this->ensureReady()) {
+            return;
+        }
+
+        $archive = $this->request->body()->getString('archive');
+        $username = trim($this->request->body()->getString('username'));
+
+        if ($archive === '' || $username === '') {
+            $this->flash->error('Choose an archive and an account.');
+
+            return;
+        }
+
+        try {
+            $account = Account::resolve($username, $this->plugin->paths);
+        } catch (\Throwable $e) {
+            $this->missingAccount = $username;
+            $this->flash->error($e->getMessage()
+                . ' Create the account in DirectAdmin first, or restore its DirectAdmin backup below and recreate it.');
+
+            return;
+        }
+
+        $target = $account->home . '/' . $subdirectory;
+        $label = $subdirectory === 'imap' ? 'Email' : 'Domains';
+
+        // Deleting first is the malware case: a restore only adds and
+        // overwrites, so a webshell dropped since the backup would survive one.
+        // It is never implied -- the operator ticks it and types the username.
+        $cleanPaths = [];
+        if ($this->request->bodyBool('clean_first')) {
+            if ($this->request->body()->getString('clean_confirm') !== $username) {
+                $this->flash->error(\sprintf(
+                    'Type "%s" to confirm deleting %s before restoring it.',
+                    $username,
+                    $target
+                ));
+
+                return;
+            }
+
+            $cleanPaths[] = $this->assertCleanable($target, $account->home);
+        }
+
+        $this->queueRestore(
+            $archive,
+            [$target],
+            '/',
+            $username,
+            [$account->home],
+            $cleanPaths,
+            $account->home
+        );
+
+        $this->flash->success(\sprintf(
+            'Restoring %s for %s back into %s%s. Follow it under Jobs.',
+            $label,
+            $username,
+            $target,
+            $cleanPaths === [] ? '' : ', deleting what is there first'
         ));
     }
 
@@ -351,7 +482,7 @@ final class AdminPage
         $paths = [$account->home];
 
         $adminBackup = $config->restoreAdminBackup()
-            ? $this->plugin->repository()->findAdminBackup($archive, $config->adminBackupsDir(), $username)
+            ? $this->findAdminBackup($archive, $config, $username)
             : null;
 
         if ($config->restoreAdminBackup() && $adminBackup === null) {
@@ -434,7 +565,7 @@ final class AdminPage
         $username = trim($this->request->body()->getString('username'));
         $destination = $this->restoreDestination();
 
-        if ($archive === '' || !$this->isPlausibleUsername($username)) {
+        if ($archive === '' || !Account::isValidName($username)) {
             $this->flash->error('Choose an archive and a valid username.');
 
             return;
@@ -502,11 +633,6 @@ final class AdminPage
         }
 
         return $normalized;
-    }
-
-    private function isPlausibleUsername(string $username): bool
-    {
-        return (bool) preg_match('/^[a-z_][a-z0-9_-]{0,31}$/i', $username);
     }
 
     /**
@@ -665,10 +791,11 @@ final class AdminPage
     private function repositoryContext(Configuration $config): array
     {
         return [
-            'detected'        => $this->probeRepository($config),
-            'has_passphrase'  => $config->hasPassphrase(),
-            'passphrase_file' => $this->plugin->paths->passphraseFile(),
-            'config_file'     => $this->plugin->paths->configFile(),
+            'detected'         => $this->probeRepository($config),
+            'has_passphrase'   => $config->hasPassphrase(),
+            'user_restore_dir' => $config->userRestoreDir(),
+            'passphrase_file'  => $this->plugin->paths->passphraseFile(),
+            'config_file'      => $this->plugin->paths->configFile(),
         ];
     }
 
@@ -681,44 +808,258 @@ final class AdminPage
 
         $archive = $this->request->param('archive');
         if ($archive !== '') {
+            $index = $this->plugin->archiveIndex();
+
+            // Nothing to show until the archive has been scanned.
+            if (!$index->exists($archive)) {
+                return [
+                    'archives'   => [],
+                    'error'      => null,
+                    'browser'    => $this->browserContext($archive),
+                    'accounts'   => null,
+                    'user_panel' => null,
+                ];
+            }
+
+            $user = trim((string) $this->request->param('user'));
+
+            // The account name becomes a path -- /home/<user> -- so it has to
+            // look like an account before it is used as one. Without this,
+            // ?user=../../etc would browse /etc while the breadcrumbs claimed
+            // to be inside a customer's home.
+            if ($user !== '' && !Account::isValidName($user)) {
+                $this->flash->error('Invalid account name.');
+                $user = '';
+            }
+
+            // An archive opens on its accounts, not on its filesystem root. The
+            // root of a DirectAdmin backup is `home` and `etc` -- two entries,
+            // neither of which is what anyone came here for -- and getting from
+            // there to a customer is four clicks through directories that only
+            // ever have one interesting child.
+            if ($user === '') {
+                return [
+                    'archives'   => [],
+                    'error'      => null,
+                    'browser'    => null,
+                    'accounts'   => $this->accountsContext($archive),
+                    'user_panel' => null,
+                ];
+            }
+
             return [
-                'archives'     => [],
-                'error'        => null,
-                'browser'      => $this->browserContext($archive),
-                'user_restore' => $this->userRestoreContext($archive, $config),
+                'archives'   => [],
+                'error'      => null,
+                'accounts'   => null,
+                'user_panel' => $this->userPanelContext($archive, $user, $config),
+                // The file browser is still there for the odd single-file
+                // request, but you reach it through an account rather than by
+                // walking down from the root.
+                'browser' => $this->request->param('path') === ''
+                    ? null
+                    : $this->browserContext($archive, $user),
             ];
         }
 
         $listing = $this->plugin->repository()->listArchives();
+        $index = $this->plugin->archiveIndex();
+
+        // Indexes for archives the server's own prune has since removed are
+        // dead weight, and this is the one place the current list is known.
+        if ($listing['result']->isSuccessful()) {
+            $index->purge(...array_map(static fn (Archive $a) => $a->name, $listing['archives']));
+        }
+
+        $format = $this->rememberArchiveFormat($config, $listing['archives']);
 
         return [
             'browser'      => null,
             'user_restore' => null,
             'error'        => $listing['result']->isSuccessful() ? null : $listing['result']->errorMessage(),
             'archives'     => array_map(
-                static fn (Archive $a) => ['name' => $a->name, 'time' => $a->time],
+                static fn (Archive $a) => [
+                    'name'     => $a->name,
+                    'stale'    => $index->isStale($a->name, $config->adminBackupsDir(), $config->indexFiles()),
+                    'built_at' => $index->builtAt($a->name),
+                    // The instant each row is rendered from: the archive's own
+                    // name when it carries a date, since that is what the
+                    // backup called this run, and borg's recorded time when it
+                    // does not.
+                    'taken_at' => ArchiveName::date($a->name, $format) ?? $a->time,
+                    'indexed'  => $index->exists($a->name),
+                ],
                 $listing['archives']
             ),
         ];
     }
 
-    /** @return array<string,mixed> */
-    private function browserContext(string $archive): array
+    /**
+     * Work out the archive naming template and keep it.
+     *
+     * Detected rather than configured, because the template belongs to the
+     * backup script and asking an operator to retype it here is asking for the
+     * two to drift. It is stored so the reading stays stable, and re-detected
+     * whenever the names stop matching -- which is what happens when the backup
+     * script's template is changed.
+     *
+     * @param Archive[] $archives
+     */
+    private function rememberArchiveFormat(Configuration $config, array $archives): string
     {
-        $path = $this->request->param('path', '/');
+        $newest = $archives[0] ?? null;
+        if ($newest === null) {
+            return $config->archiveDateFormat();
+        }
+
+        $detected = ArchiveName::format($newest->name);
+        if ($detected === null || $detected === $config->archiveDateFormat()) {
+            return $config->archiveDateFormat();
+        }
+
+        // Only on a real change, so rendering this page is not a write.
+        $this->plugin->config()->save(['archive_date_format' => $detected]);
+
+        return $detected;
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    /**
+     * The accounts in an archive, read from /home.
+     *
+     * Which accounts DirectAdmin still has is shown alongside, because the two
+     * disagreeing is the interesting case: an account in the archive but not on
+     * the server is one that was deleted, and that is a different recovery --
+     * DirectAdmin has to recreate it from its own backup before a home
+     * directory means anything.
+     *
+     * @return array<string,mixed>
+     */
+    private function accountsContext(string $archive): array
+    {
+        $listing = $this->plugin->archiveIndex()->listDirectory($archive, '/home');
+
+        $accounts = [];
+        foreach ($listing->entries as $entry) {
+            if (!$entry->isDirectory()) {
+                continue;
+            }
+
+            $accounts[] = [
+                'name'    => $entry->name,
+                'exists'  => is_dir($this->plugin->paths->daUsersDir . '/' . $entry->name),
+                'indexed' => true,
+            ];
+        }
+
+        return [
+            'archive'   => $archive,
+            'accounts'  => $accounts,
+            'truncated' => $listing->truncated,
+            'readable'  => $listing->readable,
+        ];
+    }
+
+    /**
+     * Everything offered for one account in one archive.
+     *
+     * @return array<string,mixed>
+     */
+    private function userPanelContext(string $archive, string $username, Configuration $config): array
+    {
+        $home = '/home/' . $username;
+        $index = $this->plugin->archiveIndex();
+
+        $present = [];
+        foreach ($index->listDirectory($archive, $home)->entries as $entry) {
+            if ($entry->isDirectory()) {
+                $present[$entry->name] = true;
+            }
+        }
+
+        $adminBackup = $config->restoreAdminBackup()
+            ? $this->findAdminBackup($archive, $config, $username)
+            : null;
+
+        return [
+            'archive'           => $archive,
+            'index_stale'       => $index->isStale($archive, $config->adminBackupsDir(), $config->indexFiles()),
+            'username'          => $username,
+            'home'              => $home,
+            'exists'            => is_dir($this->plugin->paths->daUsersDir . '/' . $username),
+            'has_domains'       => isset($present['domains']),
+            'has_email'         => isset($present['imap']),
+            'domains_path'      => $home . '/domains',
+            'email_path'        => $home . '/imap',
+            'admin_backup'      => $adminBackup?->path,
+            'admin_backups_dir' => $config->adminBackupsDir(),
+            'missing_account'   => $this->missingAccount,
+        ];
+    }
+
+    /**
+     * @return array<string,mixed>
+     */
+    private function browserContext(string $archive, string $username = ''): array
+    {
+        $home = $username === '' ? '' : '/home/' . $username;
+        $path = $this->request->param('path', $home === '' ? '/' : $home);
 
         try {
             $path = PathGuard::normalize($path);
+            // Reached through an account, so it stays inside that account. This
+            // is convenience rather than a security boundary -- an admin may
+            // browse anywhere -- but it keeps the breadcrumbs honest and stops
+            // a stale link dropping you back at the archive root.
+            if ($home !== '') {
+                $path = PathGuard::confine($path, $home);
+            }
         } catch (\Throwable) {
-            $path = '/';
+            $path = $home === '' ? '/' : $home;
         }
 
-        $listing = $this->plugin->repository()->listDirectory($archive, $path);
+        $index = $this->plugin->archiveIndex();
+
+        // Browsing goes through the index, never straight to borg. borg cannot
+        // list one directory -- it walks the whole archive whatever you ask --
+        // so a page that shelled out per click would cost a full scan each
+        // time, and asking for the root would try to buffer every entry.
+        if (!$index->exists($archive)) {
+            $running = $this->runningIndexJob($archive);
+
+            return [
+                'archive'             => $archive,
+                'path'                => $path,
+                'needs_index'         => true,
+                'has_files'           => false,
+                'index_default_files' => $this->plugin->config()->load()->indexFiles(),
+                'index_job'           => $running === null ? null : $this->jobToArray($running),
+                'index_log'           => $running === null ? '' : $this->plugin->jobs()->tail($running, 400),
+                'index_status_url'    => $running === null
+                    ? ''
+                    : $this->request->baseUrl() . '/status.raw?job=' . rawurlencode($running->id),
+                'crumbs'              => [],
+                'entries'             => [],
+                'truncated'           => false,
+                'error'               => null,
+                'default_destination' => '/home/admin/borg_restore',
+            ];
+        }
+
+        $listing = $index->listDirectory($archive, $path);
 
         return [
             'archive'             => $archive,
             'path'                => $path,
-            'crumbs'              => $this->crumbs($archive, $path),
+            'needs_index'         => false,
+            'has_files'           => $index->includesFiles($archive),
+            'index_default_files' => false,
+            'index_job'           => null,
+            'index_log'           => '',
+            'index_status_url'    => '',
+            'username'            => $username,
+            'crumbs'              => $this->crumbs($archive, $path, $username),
             'entries'             => array_map([$this, 'entryToArray'], $listing->entries),
             'truncated'           => $listing->truncated,
             'error'               => $listing->readable ? null : $listing->error,
@@ -726,24 +1067,38 @@ final class AdminPage
         ];
     }
 
+    /** The index job for this archive that is still running, if there is one. */
     /**
-     * State for the "restore a whole user" panel.
+     * Locate an account's DirectAdmin backup inside an archive.
      *
-     * $missingAccount is set when the operator just tried to restore a user
-     * DirectAdmin does not have, which is what turns the admin-backup-only
-     * button on.
+     * Through the index when there is one, because asking borg costs a full
+     * archive scan -- twenty seconds on a real server, paid every time the
+     * restore screen is opened. The index records this directory's files even
+     * when it is otherwise directories-only, precisely so this stays cheap.
      */
-    /** @return array<string,mixed> */
-    private function userRestoreContext(string $archive, Configuration $config): array
+    private function findAdminBackup(string $archive, Configuration $config, string $username): ?ArchiveEntry
     {
-        return [
-            'archive'             => $archive,
-            'admin_backups_dir'   => $config->adminBackupsDir(),
-            'enabled'             => $config->restoreAdminBackup(),
-            'missing_account'     => $this->missingAccount,
-            'username'            => trim($this->request->body()->getString('username')),
-            'default_destination' => '/home/admin/borg_restore',
-        ];
+        $index = $this->plugin->archiveIndex();
+
+        if ($index->exists($archive)) {
+            return Repository::pickAdminBackup(
+                $index->listDirectory($archive, $config->adminBackupsDir())->entries,
+                $username
+            );
+        }
+
+        return $this->plugin->repository()->findAdminBackup($archive, $config->adminBackupsDir(), $username);
+    }
+
+    private function runningIndexJob(string $archive): ?Job
+    {
+        foreach ($this->plugin->jobs()->recent(20, null, Job::TYPE_INDEX) as $job) {
+            if (($job->params()['archive'] ?? null) === $archive && !$job->isFinished()) {
+                return $job;
+            }
+        }
+
+        return null;
     }
 
     /** @return array<string,mixed> */
@@ -776,17 +1131,31 @@ final class AdminPage
 
     /** @return array<int,array{label:string,url:string}> */
     /** @return array<int,array{label:string,url:string}> */
-    private function crumbs(string $archive, string $path): array
+    private function crumbs(string $archive, string $path, string $username = ''): array
     {
-        $crumbs = [['label' => '/', 'url' => $this->request->url(['tab' => 'archives', 'archive' => $archive, 'path' => '/'])]];
+        $link = fn (array $extra): string => $this->request->url(array_filter(
+            ['tab' => 'archives', 'archive' => $archive, 'user' => $username] + $extra,
+            static fn ($value) => $value !== '' && $value !== null
+        ));
 
-        $accumulated = '';
-        foreach (array_filter(explode('/', $path)) as $segment) {
+        // The trail starts at the account, not at the filesystem root: the
+        // levels above it are /home and / , which are not places to go.
+        $home = $username === '' ? '' : '/home/' . $username;
+
+        if ($home === '') {
+            $crumbs = [['label' => '/', 'url' => $link(['path' => '/'])]];
+            $accumulated = '';
+            $segments = array_filter(explode('/', $path));
+        } else {
+            $crumbs = [['label' => $username, 'url' => $link(['path' => $home])]];
+            $accumulated = $home;
+            $relative = ltrim(substr($path, \strlen($home)), '/');
+            $segments = $relative === '' ? [] : array_filter(explode('/', $relative));
+        }
+
+        foreach ($segments as $segment) {
             $accumulated .= '/' . $segment;
-            $crumbs[] = [
-                'label' => $segment,
-                'url'   => $this->request->url(['tab' => 'archives', 'archive' => $archive, 'path' => $accumulated]),
-            ];
+            $crumbs[] = ['label' => $segment, 'url' => $link(['path' => $accumulated])];
         }
 
         return $crumbs;

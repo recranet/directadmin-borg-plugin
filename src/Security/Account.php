@@ -29,9 +29,28 @@ final class Account
     /**
      * @throws BorgPluginException when the name is not a usable local account
      */
+    /**
+     * Whether a string could be a Unix account name at all.
+     *
+     * Rejected rather than sanitised, deliberately. The name is an identity
+     * that has to match a real account and a real /home/<user>, so there is no
+     * "close enough": stripping the bad characters out of "../../etc" yields
+     * "etc", which is a different name that the operator never typed and which
+     * may well exist. A restore tool acting on a name nobody asked for is worse
+     * than one that says the name is wrong. Sanitising paths by substitution is
+     * also the classic way to get this wrong -- "....//" survives one pass of
+     * removing "../" and comes out as "../".
+     *
+     * The caller trims whitespace; nothing else is forgiven.
+     */
+    public static function isValidName(string $username): bool
+    {
+        return (bool) preg_match('/^[a-z_][a-z0-9_-]{0,31}$/i', $username);
+    }
+
     public static function resolve(string $username, Paths $paths): self
     {
-        if (!preg_match('/^[a-z_][a-z0-9_-]{0,31}$/i', $username)) {
+        if (!self::isValidName($username)) {
             throw new BorgPluginException('Invalid account name.');
         }
 

@@ -78,9 +78,20 @@ final class Repository
     }
 
     /**
-     * Raw recursive listing of a subtree, used by the tests and by browsing.
+     * Raw recursive listing of a subtree.
      *
-     * @return array{result: BorgResult, rows: array<int,array<string,mixed>>}
+     * Streamed and capped rather than buffered. borg has no depth limit, so a
+     * listing without a path is the entire archive: 2.5 million entries and
+     * ~880 MB of JSON on a real hosting server, which is enough to kill the
+     * process outright. The cap is applied as the lines arrive, and borg is
+     * hung up on the moment it is reached, so neither memory nor time depends
+     * on how big the archive is.
+     *
+     * This is the fallback for a bounded subtree. Browsing goes through
+     * ArchiveIndex, because even a capped scan still costs a full pass over the
+     * archive metadata.
+     *
+     * @return array{result: BorgResult, rows: array<int,array<string,mixed>>, truncated: bool}
      */
     public function listSubtree(string $archive, ?string $path = null, int $limit = 50000): array
     {
@@ -93,9 +104,31 @@ final class Repository
             $arguments[] = PathGuard::toArchiveMember($path);
         }
 
-        $result = $this->borg->run($arguments, 300);
+        $rows = [];
+        $truncated = false;
 
-        return ['result' => $result, 'rows' => $result->jsonLines($limit)];
+        $result = $this->borg->runStreaming(
+            $arguments,
+            static function (string $line) use (&$rows, &$truncated, $limit): bool {
+                $decoded = json_decode($line, true);
+                if (!\is_array($decoded)) {
+                    return true;
+                }
+
+                $rows[] = $decoded;
+
+                if (\count($rows) >= $limit) {
+                    $truncated = true;
+
+                    return false;
+                }
+
+                return true;
+            },
+            600
+        );
+
+        return ['result' => $result, 'rows' => $rows, 'truncated' => $truncated];
     }
 
     /**
@@ -113,7 +146,7 @@ final class Repository
         $listing = $this->listSubtree($archive, $directory === '' ? null : $directory, $limit * 25);
 
         $children = [];
-        $truncated = false;
+        $truncated = $listing['truncated'];
 
         foreach ($listing['rows'] as $row) {
             $entryPath = '/' . ltrim((string) ($row['path'] ?? ''), '/');
@@ -168,6 +201,26 @@ final class Repository
     public const ADMIN_BACKUP_EXTENSIONS = ['tar.zst', 'tar.gz', 'tar.bz2', 'tar'];
 
     /**
+     * Whether a file in the backups directory is this account's backup.
+     *
+     * DirectAdmin writes these as <level>.<creator>.<user>.tar.<ext> --
+     * `user.admin.beaujean.tar.zst`, or `admin.root.admin.tar.zst` for an admin
+     * account -- while some setups produce the plain `<user>.tar.<ext>`. Both
+     * are accepted.
+     *
+     * The dot before the username is what makes the suffix match safe: looking
+     * for ".jean.tar.zst" does not match "user.admin.beaujean.tar.zst", where a
+     * bare "jean.tar.zst" would, and restoring the wrong customer's databases
+     * is not a mistake worth risking to save a character.
+     */
+    private static function isAdminBackupFor(string $filename, string $username, string $extension): bool
+    {
+        $suffix = $username . '.' . $extension;
+
+        return $filename === $suffix || str_ends_with($filename, '.' . $suffix);
+    }
+
+    /**
      * Find a user's DirectAdmin admin backup inside an archive.
      *
      * DirectAdmin names these <username>.<ext>, and the extension depends on
@@ -176,17 +229,33 @@ final class Repository
      */
     public function findAdminBackup(string $archive, string $adminBackupsDir, string $username): ?ArchiveEntry
     {
+        return self::pickAdminBackup($this->listDirectory($archive, $adminBackupsDir)->entries, $username);
+    }
+
+    /**
+     * Pick a user's DirectAdmin backup out of an already-listed directory.
+     *
+     * Separate from findAdminBackup() so the archive index can answer the same
+     * question without going back to borg, which costs a full archive scan.
+     *
+     * @param ArchiveEntry[] $entries
+     */
+    public static function pickAdminBackup(array $entries, string $username): ?ArchiveEntry
+    {
         $candidates = [];
-        foreach ($this->listDirectory($archive, $adminBackupsDir)->entries as $entry) {
+        foreach ($entries as $entry) {
             if (!$entry->isDirectory()) {
                 $candidates[$entry->name] = $entry;
             }
         }
 
+        // Extension order is preference order, so an exact name is only
+        // preferred over a prefixed one within the same extension.
         foreach (self::ADMIN_BACKUP_EXTENSIONS as $extension) {
-            $name = $username . '.' . $extension;
-            if (isset($candidates[$name])) {
-                return $candidates[$name];
+            foreach ($candidates as $name => $entry) {
+                if (self::isAdminBackupFor((string) $name, $username, $extension)) {
+                    return $entry;
+                }
             }
         }
 

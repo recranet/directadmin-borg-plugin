@@ -24,7 +24,15 @@ final class Configuration
         'admin_backups_dir'    => '/home/admin/admin_backups',
         'restore_admin_backup' => true,
         'user_restore_enabled' => true,
-        'user_restore_dir'     => 'borg_restore',
+        // Detected from the archive names rather than typed in, and remembered
+        // so a repository whose names could match two timestamp shapes keeps
+        // reading the same way. Empty means "work it out again".
+        'archive_date_format' => '',
+        // Whether an archive index records individual files as well as the
+        // directory tree. Off by default: on a hosting server files outnumber
+        // directories five to one, and restoring a directory brings its files
+        // back regardless of whether they were ever listed.
+        'index_files' => false,
     ];
 
     /**
@@ -90,9 +98,30 @@ final class Configuration
         return (bool) $this->get('user_restore_enabled');
     }
 
+    /**
+     * Where a customer's own restores land, inside their home.
+     *
+     * Fixed rather than configurable. Unlike the admin restores, which put
+     * files back where they came from, this one must not touch live data: a
+     * customer clicking "restore" is not making the same considered decision an
+     * administrator is, and there is no undo. One name, always, means the
+     * support answer is the same on every server.
+     */
+    public const USER_RESTORE_DIR = 'borg_restore';
+
     public function userRestoreDir(): string
     {
-        return (string) $this->get('user_restore_dir');
+        return self::USER_RESTORE_DIR;
+    }
+
+    public function archiveDateFormat(): string
+    {
+        return (string) $this->get('archive_date_format');
+    }
+
+    public function indexFiles(): bool
+    {
+        return (bool) $this->get('index_files');
     }
 
     public function passphrase(): string

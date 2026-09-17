@@ -1,0 +1,186 @@
+{# One account, one archive: the two restores that are actually asked for, and
+   a way through to the files for everything else. Every restore here goes back
+   where it came from, so there is no destination to choose. #}
+<div class="borg-card">
+    <h2>
+        {% include 'partial/user_icon.html.twig' %}
+        {{ user_panel.username }}
+    </h2>
+
+    <p class="borg-note" style="margin-top:0">
+        Restores below put files back in <span class="borg-mono">{{ user_panel.home }}</span>,
+        with their original ownership. Existing files are overwritten; anything created since
+        the backup is left alone unless you ask for it to be deleted first.
+    </p>
+
+    {% if user_panel.index_stale %}
+        <div class="borg-alert borg-alert-warn">
+            This archive was indexed before the current restore settings were saved, so what it
+            knows about DirectAdmin backups may be out of date. Refresh it to be sure.
+            <form method="post" action="{{ url({ tab: 'archives', archive: user_panel.archive, user: user_panel.username }) }}"
+                  style="display:inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="action" value="build_index">
+                <input type="hidden" name="archive" value="{{ user_panel.archive }}">
+                <button class="borg-btn" type="submit" style="margin-top:8px">Refresh index</button>
+            </form>
+        </div>
+    {% endif %}
+
+    {% if not user_panel.exists %}
+        <div class="borg-alert borg-alert-warn">
+            DirectAdmin has no account called <span class="borg-mono">{{ user_panel.username }}</span>.
+            Restoring a home directory for an account that does not exist leaves files with no owner,
+            so recreate the account first &mdash; see <strong>Restore the whole account</strong> below.
+        </div>
+    {% endif %}
+</div>
+
+{# ------------------------------------------------------------------ domains #}
+<div class="borg-card">
+    <h2>Restore Domains</h2>
+
+    {% if not user_panel.has_domains %}
+        <p class="borg-empty">
+            <span class="borg-mono">{{ user_panel.domains_path }}</span> is not in this archive.
+        </p>
+    {% else %}
+        <p class="borg-note" style="margin-top:0">
+            Websites, as they were at this backup, back into
+            <span class="borg-mono">{{ user_panel.domains_path }}</span>.
+        </p>
+
+        <form method="post" action="{{ url({ tab: 'archives', archive: user_panel.archive, user: user_panel.username }) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="action" value="restore_domains">
+            <input type="hidden" name="archive" value="{{ user_panel.archive }}">
+            <input type="hidden" name="username" value="{{ user_panel.username }}">
+
+            <div class="borg-field" style="border-left:3px solid var(--borg-err);padding-left:12px">
+                <label>
+                    <input type="checkbox" name="clean_first" value="1">
+                    Delete <span class="borg-mono">{{ user_panel.domains_path }}</span> first
+                </label>
+                <span class="borg-hint">
+                    A restore only adds and overwrites, so a webshell added since the backup
+                    survives one. Tick this for a compromised site, so nothing outside the archive
+                    is left behind. It deletes the whole <span class="borg-mono">domains</span>
+                    directory &mdash; if <span class="borg-mono">public_html</span> is a symlink
+                    into a repository beside it, removing only that link would leave the real
+                    files, malware included.
+                </span>
+
+                <div class="borg-field" style="margin-top:10px;margin-bottom:0">
+                    <label for="borg-domains-confirm">Type the username to confirm deletion</label>
+                    <input type="text" id="borg-domains-confirm" name="clean_confirm" value=""
+                           style="max-width:220px" autocapitalize="off" autocorrect="off" spellcheck="false">
+                </div>
+            </div>
+
+            <div class="borg-actions">
+                <button class="borg-btn borg-btn-primary" type="submit">Restore Domains</button>
+            </div>
+        </form>
+    {% endif %}
+</div>
+
+{# -------------------------------------------------------------------- email #}
+<div class="borg-card">
+    <h2>Restore Email</h2>
+
+    {% if not user_panel.has_email %}
+        <p class="borg-empty">
+            <span class="borg-mono">{{ user_panel.email_path }}</span> is not in this archive.
+        </p>
+    {% else %}
+        <p class="borg-note" style="margin-top:0">
+            Mailboxes, as they were at this backup, back into
+            <span class="borg-mono">{{ user_panel.email_path }}</span>. Mail that has arrived since
+            is left in place, so this adds messages back rather than replacing the mailbox.
+        </p>
+
+        <form method="post" action="{{ url({ tab: 'archives', archive: user_panel.archive, user: user_panel.username }) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="action" value="restore_email">
+            <input type="hidden" name="archive" value="{{ user_panel.archive }}">
+            <input type="hidden" name="username" value="{{ user_panel.username }}">
+
+            <div class="borg-actions">
+                <button class="borg-btn borg-btn-primary" type="submit">Restore Email</button>
+            </div>
+        </form>
+    {% endif %}
+</div>
+
+{# ------------------------------------------------------------ whole account #}
+<div class="borg-card">
+    <h2>Restore the whole account</h2>
+
+    <p class="borg-note" style="margin-top:0">
+        The home directory together with the DirectAdmin backup from
+        <span class="borg-mono">{{ user_panel.admin_backups_dir }}</span>, which holds the
+        databases and the account configuration. A home directory on its own has neither.
+    </p>
+
+    {% if user_panel.admin_backup %}
+        <p class="borg-note">
+            Found in this archive: <span class="borg-mono">{{ user_panel.admin_backup }}</span>
+        </p>
+    {% else %}
+        <div class="borg-alert borg-alert-warn">
+            No DirectAdmin backup for this account is in this archive, so only the home directory
+            can be restored. Databases and account configuration are not in a home directory.
+        </div>
+    {% endif %}
+
+    <form method="post" action="{{ url({ tab: 'archives', archive: user_panel.archive, user: user_panel.username }) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="action" value="restore_user">
+        <input type="hidden" name="archive" value="{{ user_panel.archive }}">
+        <input type="hidden" name="username" value="{{ user_panel.username }}">
+        <input type="hidden" name="in_place" value="1">
+
+        <div class="borg-actions">
+            <button class="borg-btn" type="submit">Restore whole account</button>
+        </div>
+    </form>
+
+    {% if user_panel.missing_account %}
+        {# The account is gone, so its home cannot be restored yet. The
+           DirectAdmin backup is what recreates it, so offer just that. #}
+        <form method="post" action="{{ url({ tab: 'archives', archive: user_panel.archive, user: user_panel.username }) }}"
+              style="margin-top:12px">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="action" value="restore_admin_backup">
+            <input type="hidden" name="archive" value="{{ user_panel.archive }}">
+            <input type="hidden" name="username" value="{{ user_panel.missing_account }}">
+            <input type="hidden" name="to_directadmin" value="1">
+
+            <ol class="borg-note" style="margin-top:4px">
+                <li>Restore the DirectAdmin backup into
+                    <span class="borg-mono">{{ user_panel.admin_backups_dir }}</span> with the button below.</li>
+                <li>Recreate the account from it with <strong>Admin Level &rarr; Restore Backups</strong>.</li>
+                <li>Come back here and restore Domains and Email.</li>
+            </ol>
+
+            <button class="borg-btn borg-btn-primary" type="submit">
+                Restore {{ user_panel.missing_account }}'s DirectAdmin backup
+            </button>
+        </form>
+    {% endif %}
+</div>
+
+{# ---------------------------------------------------------------- the files #}
+<div class="borg-card">
+    <h2>Browse files</h2>
+    <p class="borg-note" style="margin-top:0">
+        For anything the two buttons above do not cover &mdash; one file a customer deleted,
+        say. Browsing is scoped to this account.
+    </p>
+    <div class="borg-actions">
+        <a class="borg-btn" href="{{ url({ tab: 'archives', archive: user_panel.archive, user: user_panel.username, path: user_panel.home }) }}">
+            Browse {{ user_panel.home }}
+        </a>
+        <a class="borg-btn" href="{{ url({ tab: 'archives', archive: user_panel.archive }) }}">Back to accounts</a>
+    </div>
+</div>
