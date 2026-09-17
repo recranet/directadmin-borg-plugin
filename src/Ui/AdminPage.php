@@ -18,14 +18,17 @@ use Recranet\DirectAdminBorg\Security\PathGuard;
 use Recranet\DirectAdminBorg\Support\Format;
 
 /**
- * Admin-level page: repository setup, backup settings, schedule, archives, jobs.
+ * Admin-level page: point the plugin at an existing repository, browse its
+ * archives, restore from them.
+ *
+ * Nothing here creates or fills a repository. That is the job of whatever
+ * already backs this server up.
  */
 final class AdminPage
 {
     private const TABS = [
         'overview'   => 'Overview',
         'repository' => 'Repository',
-        'backup'     => 'Backup',
         'archives'   => 'Archives',
         'jobs'       => 'Jobs',
     ];
@@ -56,7 +59,7 @@ final class AdminPage
             $this->handlePost();
         }
 
-        // Reload: a POST may have changed the repository, schedule or secrets.
+        // Reload: a POST may have changed the repository or the secrets.
         $config = $this->plugin->config()->load();
         $repository = $this->plugin->repository();
         $runner = $repository->runner();
@@ -68,7 +71,7 @@ final class AdminPage
 
         $context = [
             'title'      => 'Borg Backup',
-            'subtitle'   => 'Server-wide BorgBackup repositories, schedules and restores.',
+            'subtitle'   => 'Browse and restore from the BorgBackup repository this server already writes to.',
             'tabs'       => self::TABS,
             'active_tab' => $tab,
             'configured' => $config->isConfigured(),
@@ -85,7 +88,6 @@ final class AdminPage
 
         $context += match ($tab) {
             'repository' => $this->repositoryContext($config),
-            'backup'     => $this->backupContext($config),
             'archives'   => $this->archivesContext($config),
             'jobs'       => $this->jobsContext(),
             default      => $this->overviewContext($config),
@@ -115,13 +117,8 @@ final class AdminPage
         try {
             match ($this->request->action()) {
                 'save_repository'      => $this->saveRepository(),
-                'init_repository'      => $this->initRepository(),
-                'save_backup'          => $this->saveBackup(),
-                'run_backup'           => $this->startJob(Job::TYPE_BACKUP),
-                'run_prune'            => $this->startJob(Job::TYPE_PRUNE),
                 'run_check'            => $this->startJob(Job::TYPE_CHECK),
                 'break_lock'           => $this->breakLock(),
-                'delete_archive'       => $this->deleteArchive(),
                 'restore'              => $this->restore(),
                 'restore_user'         => $this->restoreUser(),
                 'restore_admin_backup' => $this->restoreAdminBackupOnly(),
@@ -132,105 +129,122 @@ final class AdminPage
         }
     }
 
+    /**
+     * Save the repository location, after proving something is actually there.
+     *
+     * The plugin never runs `borg init`: the repository belongs to the backup
+     * job that already exists on this server, and creating a second, empty one
+     * next to it -- which is what a typo in this field would otherwise do --
+     * would look like a working configuration with nothing to restore from.
+     * So the location is probed with `borg info` and only stored if borg
+     * recognises it. That probe also settles the passphrase and BORG_RSH,
+     * because an encrypted or remote repository cannot be read without them.
+     */
     private function saveRepository(): void
     {
         $body = $this->request->body();
 
-        $errors = $this->plugin->config()->save([
-            'repository'  => $body->getString('repository'),
-            'encryption'  => $body->getString('encryption'),
-            'ssh_command' => $body->getString('ssh_command'),
-        ]);
-
-        foreach ($errors as $error) {
-            $this->flash->error($error);
-        }
-
-        // An empty passphrase field means "leave unchanged"; clearing it is a
-        // separate checkbox, so a blank form submit cannot destroy the key.
+        // The secrets first: the probe below needs them, and a passphrase for a
+        // repository that then fails to verify is still worth keeping, because
+        // the usual fix is to correct the path and submit again.
         if ($this->request->bodyBool('clear_passphrase')) {
             $this->plugin->config()->setPassphrase('');
             $this->flash->warning('Stored passphrase removed.');
         } elseif ($body->getString('passphrase') !== '') {
             $this->plugin->config()->setPassphrase($body->getString('passphrase'));
-            $this->flash->success('Passphrase stored.');
         }
-
-        if ($errors === []) {
-            $this->flash->success('Repository settings saved.');
-        }
-    }
-
-    private function initRepository(): void
-    {
-        $config = $this->plugin->config()->load();
-
-        if (!$config->isConfigured()) {
-            $this->flash->error('Set a repository location first.');
-
-            return;
-        }
-        if ($config->requiresPassphrase() && !$config->hasPassphrase()) {
-            $this->flash->error('This encryption mode needs a passphrase. Save one before initialising.');
-
-            return;
-        }
-
-        $result = $this->plugin->repository()->initialize();
-
-        if ($result->isSuccessful()) {
-            $this->flash->success('Repository initialised.');
-
-            return;
-        }
-
-        $message = $result->errorMessage();
-        if (stripos($message, 'already exists') !== false) {
-            $this->flash->warning('A repository already exists at that location; nothing was changed.');
-
-            return;
-        }
-
-        $this->flash->error('Could not initialise the repository: ' . $message);
-    }
-
-    private function saveBackup(): void
-    {
-        $body = $this->request->body();
 
         $errors = $this->plugin->config()->save([
-            'source_paths'         => $body->getString('source_paths'),
-            'exclude_patterns'     => $body->getString('exclude_patterns'),
-            'compression'          => $body->getString('compression'),
-            'archive_name'         => $body->getString('archive_name'),
-            'archive_prefix'       => $body->getString('archive_prefix'),
-            'one_file_system'      => $this->request->bodyBool('one_file_system'),
-            'prune_enabled'        => $this->request->bodyBool('prune_enabled'),
-            'keep_daily'           => $body->getString('keep_daily'),
-            'keep_weekly'          => $body->getString('keep_weekly'),
-            'keep_monthly'         => $body->getString('keep_monthly'),
-            'compact_after_prune'  => $this->request->bodyBool('compact_after_prune'),
-            'schedule_enabled'     => $this->request->bodyBool('schedule_enabled'),
-            'schedule_minute'      => $body->getString('schedule_minute'),
-            'schedule_hour'        => $body->getString('schedule_hour'),
-            'run_after_da_backups' => $this->request->bodyBool('run_after_da_backups'),
+            'admin_backups_dir'    => $body->getString('admin_backups_dir'),
+            'restore_admin_backup' => $this->request->bodyBool('restore_admin_backup'),
             'user_restore_enabled' => $this->request->bodyBool('user_restore_enabled'),
             'user_restore_dir'     => $body->getString('user_restore_dir'),
         ]);
-
         foreach ($errors as $error) {
             $this->flash->error($error);
         }
-        if ($errors !== []) {
+
+        $location = trim($body->getString('repository'));
+        $sshCommand = $body->getString('ssh_command');
+
+        // Validate without persisting, so a location that passes the syntax
+        // rules but is not a repository never reaches the config file.
+        $candidate = $this->plugin->config()->load()->withValues([
+            'repository'  => $location,
+            'ssh_command' => trim($sshCommand),
+        ]);
+
+        $syntax = $this->plugin->config()->validate([
+            'repository'  => $location,
+            'ssh_command' => $sshCommand,
+        ]);
+        if ($syntax !== []) {
+            foreach ($syntax as $error) {
+                $this->flash->error($error);
+            }
+
             return;
         }
 
-        try {
-            $this->plugin->cron()->apply($this->plugin->config()->load());
-            $this->flash->success('Backup settings saved.');
-        } catch (\Throwable $e) {
-            $this->flash->warning('Settings saved, but the cron file could not be written: ' . $e->getMessage());
+        if (!$this->plugin->repository()->runner()->isInstalled()) {
+            $this->flash->error('borg is not installed on this server, so the repository cannot be verified.');
+
+            return;
         }
+
+        $probe = (new Repository($this->plugin->borg(), $candidate))->info();
+
+        if (!$probe->isSuccessful()) {
+            $this->flash->error($this->describeProbeFailure($probe->errorMessage(), $location));
+
+            return;
+        }
+
+        $saved = $this->plugin->config()->save([
+            'repository'  => $location,
+            'ssh_command' => $sshCommand,
+        ]);
+        foreach ($saved as $error) {
+            $this->flash->error($error);
+        }
+
+        if ($saved === []) {
+            $encryption = $probe->json()['encryption']['mode'] ?? null;
+            $this->flash->success(\sprintf(
+                'Repository found and saved: %s%s.',
+                $location,
+                \is_string($encryption) ? ', encryption ' . $encryption : ''
+            ));
+        }
+    }
+
+    /**
+     * Turn borg's error into something that names the likely cause.
+     *
+     * The two that matter are "there is no repository here" and "there is one
+     * but I cannot open it", and borg's own wording for the first is easy to
+     * read as a plugin bug rather than a wrong path.
+     */
+    private function describeProbeFailure(string $message, string $location): string
+    {
+        if (stripos($message, 'does not exist') !== false
+            || stripos($message, 'is not a valid repository') !== false
+            || stripos($message, 'no such file or directory') !== false
+        ) {
+            return \sprintf(
+                'No borg repository at %s, so nothing was saved. This plugin only restores;'
+                . ' it does not create repositories. Check the path against the one your backup'
+                . ' script uses, and remember borg repositories are per-host (often .../borg/$(hostname)).',
+                $location
+            );
+        }
+
+        if (stripos($message, 'passphrase') !== false || stripos($message, 'decrypt') !== false) {
+            return 'A repository is there but could not be unlocked: ' . $message
+                . ' Save the passphrase in the field above and try again.';
+        }
+
+        return 'Could not read the repository, so nothing was saved: ' . $message;
     }
 
     private function startJob(string $type): void
@@ -239,13 +253,7 @@ final class AdminPage
             return;
         }
 
-        $config = $this->plugin->config()->load();
-
-        $params = $type === Job::TYPE_BACKUP
-            ? ['prune' => $config->pruneEnabled(), 'trigger' => 'manual']
-            : ['trigger' => 'manual'];
-
-        $job = $this->plugin->jobs()->create($type, $this->request->username, $params);
+        $job = $this->plugin->jobs()->create($type, $this->request->username, ['trigger' => 'manual']);
         $this->plugin->dispatcher()->dispatch($job);
 
         $this->flash->success(\sprintf('%s started. Follow it under Jobs.', ucfirst($type)));
@@ -263,35 +271,6 @@ final class AdminPage
             $this->flash->success('Repository lock released.');
         } else {
             $this->flash->error('Could not release the lock: ' . $result->errorMessage());
-        }
-    }
-
-    private function deleteArchive(): void
-    {
-        if (!$this->ensureReady()) {
-            return;
-        }
-
-        $archive = $this->request->body()->getString('archive');
-        if ($archive === '') {
-            $this->flash->error('No archive selected.');
-
-            return;
-        }
-
-        // Deleting an archive cannot be undone, so require the name typed back.
-        if ($this->request->body()->getString('confirm') !== $archive) {
-            $this->flash->error('Type the archive name exactly to confirm deletion.');
-
-            return;
-        }
-
-        $result = $this->plugin->repository()->deleteArchive($archive);
-
-        if ($result->isSuccessful()) {
-            $this->flash->success(\sprintf('Archive "%s" deleted.', $archive));
-        } else {
-            $this->flash->error('Could not delete the archive: ' . $result->errorMessage());
         }
     }
 
@@ -613,64 +592,83 @@ final class AdminPage
 
     // -------------------------------------------------------------- context
 
+    /**
+     * The one probe both Overview and Repository need.
+     *
+     * Everything shown about the repository comes from borg rather than from
+     * the config file: the encryption mode, the size and the date of the newest
+     * archive are facts about a repository this plugin does not own, so caching
+     * them locally would only let them go stale.
+     *
+     * @return array<string,mixed>
+     */
+    private function probeRepository(Configuration $config): array
+    {
+        $detected = [
+            'reachable'     => false,
+            'id'            => null,
+            'short_id'      => null,
+            'encryption'    => null,
+            'archive_count' => null,
+            'unique_size'   => null,
+            'total_size'    => null,
+            'last_archive'  => null,
+            'error'         => null,
+        ];
+
+        if (!$config->isConfigured() || !$this->plugin->repository()->runner()->isInstalled()) {
+            return $detected;
+        }
+
+        $info = $this->plugin->repository()->info();
+
+        if (!$info->isSuccessful()) {
+            $detected['error'] = $info->errorMessage();
+
+            return $detected;
+        }
+
+        $json = $info->json();
+        $stats = $json['cache']['stats'] ?? null;
+
+        $detected['reachable'] = true;
+        $detected['id'] = $json['repository']['id'] ?? null;
+        // Shortened here rather than with Twig's |slice: plugin scripts run on
+        // `php -n`, where neither mbstring nor iconv is loaded and that filter
+        // dies with "Call to undefined function iconv_substr()".
+        $detected['short_id'] = \is_string($detected['id']) ? substr($detected['id'], 0, 12) : null;
+        $detected['encryption'] = $json['encryption']['mode'] ?? null;
+
+        if (\is_array($stats)) {
+            $detected['unique_size'] = $stats['unique_csize'] ?? null;
+            $detected['total_size'] = $stats['total_size'] ?? null;
+        }
+
+        // The newest archive is what "is this repository still being written
+        // to?" actually means here, and it is the only honest answer available:
+        // the runs that produce it are not this plugin's, so there is no job
+        // history to read it off.
+        $archives = $this->plugin->repository()->listArchives()['archives'];
+        $detected['archive_count'] = \count($archives);
+        $detected['last_archive'] = $archives === [] ? null : $archives[0]->time;
+
+        return $detected;
+    }
+
     /** @return array<string,mixed> */
     private function overviewContext(Configuration $config): array
     {
-        $status = [
-            'repository'      => $config->repository(),
-            'encryption'      => $config->encryption(),
-            'schedule'        => $config->describeSchedule(),
-            'last_backup'     => 'never',
-            'archive_count'   => null,
-            'repository_size' => null,
-            'original_size'   => null,
-            'error'           => null,
-        ];
-
-        foreach ($this->plugin->jobs()->recent(40, null, Job::TYPE_BACKUP) as $job) {
-            if ($job->isFinished()) {
-                $status['last_backup'] = \sprintf('%s (%s)', Format::age((string) $job->get('finished_at')), $job->status());
-                break;
-            }
-        }
-
-        if ($config->isConfigured() && $this->plugin->repository()->runner()->isInstalled()) {
-            $info = $this->plugin->repository()->info();
-
-            if ($info->isSuccessful()) {
-                $stats = $info->json()['cache']['stats'] ?? null;
-                if (\is_array($stats)) {
-                    $status['repository_size'] = $stats['unique_csize'] ?? null;
-                    $status['original_size'] = $stats['total_size'] ?? null;
-                }
-                $status['archive_count'] = \count($this->plugin->repository()->listArchives()['archives']);
-            } else {
-                $status['error'] = $info->errorMessage();
-            }
-        }
-
-        return ['status' => $status];
+        return ['detected' => $this->probeRepository($config)];
     }
 
     /** @return array<string,mixed> */
     private function repositoryContext(Configuration $config): array
     {
         return [
-            'encryption_modes' => Configuration::ENCRYPTION_MODES,
-            'has_passphrase'   => $config->hasPassphrase(),
-            'passphrase_file'  => $this->plugin->paths->passphraseFile(),
-        ];
-    }
-
-    /** @return array<string,mixed> */
-    private function backupContext(Configuration $config): array
-    {
-        return [
-            'cron_file'            => $this->plugin->cron()->file(),
-            'schedule_description' => $config->describeSchedule(),
-            // Warn rather than silently produce archives that cannot restore an
-            // account: the admin backups hold the databases and DA config.
-            'admin_backups_covered' => $config->covers($config->adminBackupsDir()),
+            'detected'        => $this->probeRepository($config),
+            'has_passphrase'  => $config->hasPassphrase(),
+            'passphrase_file' => $this->plugin->paths->passphraseFile(),
+            'config_file'     => $this->plugin->paths->configFile(),
         ];
     }
 
@@ -742,7 +740,6 @@ final class AdminPage
             'archive'             => $archive,
             'admin_backups_dir'   => $config->adminBackupsDir(),
             'enabled'             => $config->restoreAdminBackup(),
-            'covered'             => $config->covers($config->adminBackupsDir()),
             'missing_account'     => $this->missingAccount,
             'username'            => trim($this->request->body()->getString('username')),
             'default_destination' => '/home/admin/borg_restore',
@@ -822,7 +819,6 @@ final class AdminPage
             'created_at'  => (string) $job->get('created_at'),
             'started_at'  => (string) $job->get('started_at'),
             'finished_at' => (string) $job->get('finished_at'),
-            'stats'       => $job->stats(),
             'running'     => $job->isRunning(),
         ];
     }

@@ -16,8 +16,8 @@
     {% if borg.uid != 0 %}
         <div class="borg-alert borg-alert-err">
             This plugin is running as uid {{ borg.uid }}, not root. Set <code>admin_run_as=root</code>
-            in plugin.conf: backups cannot read <code>/home/*</code> (mode 0711), <code>/etc/shadow</code>
-            or the DirectAdmin configuration otherwise, and would silently archive almost nothing.
+            in plugin.conf: a root-owned repository cannot be read otherwise, and a restore cannot
+            write into <code>/home/*</code> (mode 0711) or give files back their original ownership.
         </div>
     {% endif %}
 {% endblock %}

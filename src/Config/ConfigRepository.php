@@ -39,20 +39,20 @@ final class ConfigRepository
     }
 
     /**
-     * Validate and persist a partial set of submitted values.
+     * Check a partial set of submitted values without storing anything.
      *
-     * Nothing is written unless every field passes: a half-applied
-     * configuration could point backups at the wrong repository.
+     * Split out of save() so a caller can reject input on syntax before doing
+     * expensive work with it -- the repository field is probed with `borg info`
+     * before it is saved, and there is no point shelling out for a value that
+     * is not a repository location at all.
      *
      * @param array<string,mixed> $input
      *
-     * @return string[] validation messages; empty means the change was saved
+     * @return string[] validation messages; empty means the input is acceptable
      */
-    public function save(array $input): array
+    public function validate(array $input): array
     {
-        $current = $this->load()->toArray();
-
-        $candidate = $current;
+        $candidate = $this->load()->toArray();
         foreach ($input as $key => $value) {
             if (\array_key_exists($key, Configuration::DEFAULTS)) {
                 $candidate[$key] = $value;
@@ -74,8 +74,34 @@ final class ConfigRepository
             }
         }
 
+        return array_values(array_unique($errors));
+    }
+
+    /**
+     * Validate and persist a partial set of submitted values.
+     *
+     * Nothing is written unless every field passes: a half-applied
+     * configuration could point backups at the wrong repository.
+     *
+     * @param array<string,mixed> $input
+     *
+     * @return string[] validation messages; empty means the change was saved
+     */
+    public function save(array $input): array
+    {
+        $current = $this->load()->toArray();
+
+        $candidate = $current;
+        foreach ($input as $key => $value) {
+            if (\array_key_exists($key, Configuration::DEFAULTS)) {
+                $candidate[$key] = $value;
+            }
+        }
+        $candidate = $this->coerce($candidate);
+
+        $errors = $this->validate($input);
         if ($errors !== []) {
-            return array_values(array_unique($errors));
+            return $errors;
         }
 
         $this->filesystem->dumpFile(
@@ -112,71 +138,27 @@ final class ConfigRepository
     /**
      * Normalise submitted values into the types the constraints expect.
      *
-     * Form input arrives as strings, so booleans and integers have to be cast
-     * before Assert\Type would ever pass, and the two list fields accept either
-     * a textarea's newline-separated text or a real array.
-     */
-    /**
+     * Form input arrives as strings, so the checkboxes have to be cast to bool
+     * before Assert\Type would ever pass.
+     *
      * @param array<string,mixed> $values
      *
      * @return array<string,mixed>
      */
     private function coerce(array $values): array
     {
-        foreach (['source_paths', 'exclude_patterns'] as $key) {
-            $values[$key] = $this->toLines($values[$key] ?? []);
-        }
-        foreach ([
-            'one_file_system',
-            'prune_enabled',
-            'compact_after_prune',
-            'schedule_enabled',
-            'run_after_da_backups',
-            'restore_admin_backup',
-            'user_restore_enabled',
-        ] as $key) {
+        foreach (['restore_admin_backup', 'user_restore_enabled'] as $key) {
             $values[$key] = $this->toBool($values[$key] ?? false);
         }
-        foreach (['keep_daily', 'keep_weekly', 'keep_monthly'] as $key) {
-            $values[$key] = is_numeric($values[$key] ?? 0) ? (int) $values[$key] : -1;
-        }
-        foreach ([
-            'repository',
-            'encryption',
-            'ssh_command',
-            'archive_name',
-            'archive_prefix',
-            'compression',
-            'schedule_minute',
-            'schedule_hour',
-            'admin_backups_dir',
-        ] as $key) {
+        foreach (['repository', 'ssh_command', 'admin_backups_dir'] as $key) {
             $values[$key] = trim((string) ($values[$key] ?? ''));
         }
 
-        // Trimmed of slashes so "/borg_restore/" and "borg_restore" behave the
-        // same; the constraint then rejects anything still containing a slash.
+        // Trimmed of surrounding whitespace only; the constraint then rejects
+        // anything containing a slash, so it stays a single path segment.
         $values['user_restore_dir'] = trim((string) ($values['user_restore_dir'] ?? ''), " \t");
 
         return $values;
-    }
-
-    /** @return string[] */
-    private function toLines(mixed $value): array
-    {
-        $lines = \is_array($value)
-            ? $value
-            : (preg_split('/\r\n|\r|\n/', (string) $value) ?: []);
-
-        $result = [];
-        foreach ($lines as $line) {
-            $line = trim((string) $line);
-            if ($line !== '') {
-                $result[] = $line;
-            }
-        }
-
-        return array_values(array_unique($result));
     }
 
     private function toBool(mixed $value): bool

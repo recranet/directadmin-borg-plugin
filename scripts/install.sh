@@ -1,6 +1,9 @@
 #!/bin/sh
 # Installer for the DirectAdmin Borg plugin.
 #
+# The plugin restores from a repository that already exists; it never creates
+# one and never runs a backup. Nothing here installs a schedule or a hook.
+#
 # Run by the DirectAdmin plugin manager, or by hand:
 #   sh /usr/local/directadmin/plugins/borg/scripts/install.sh
 set -eu
@@ -82,8 +85,23 @@ find "$PLUGIN_DIR" -type f -exec chmod 644 {} +
 chmod 755 "$PLUGIN_DIR"/admin/index.html "$PLUGIN_DIR"/admin/status.raw "$PLUGIN_DIR"/admin/menu.raw \
           "$PLUGIN_DIR"/user/index.html "$PLUGIN_DIR"/user/status.raw "$PLUGIN_DIR"/user/menu.raw \
           "$PLUGIN_DIR"/bin/console \
-          "$PLUGIN_DIR"/hooks/all_backups_post.sh \
           "$PLUGIN_DIR"/scripts/install.sh "$PLUGIN_DIR"/scripts/uninstall.sh
+
+# ------------------------------------------------------- legacy 1.x cleanup
+# Versions before 2.0 ran backups: they could install a cron schedule and a
+# DirectAdmin hook. Both would keep firing against a plugin that no longer has
+# the commands they call, so an upgrade has to take them away.
+LEGACY_CRON="${BORG_PLUGIN_CRON_FILE:-/etc/cron.d/directadmin-borg}"
+LEGACY_HOOK=/usr/local/directadmin/scripts/custom/all_backups_post/borg-plugin.sh
+
+if [ -f "$LEGACY_CRON" ]; then
+    rm -f "$LEGACY_CRON"
+    log "Removed the schedule left by an older version: $LEGACY_CRON"
+fi
+if [ -f "$LEGACY_HOOK" ]; then
+    rm -f "$LEGACY_HOOK"
+    log "Removed the backup hook left by an older version: $LEGACY_HOOK"
+fi
 
 # State lives outside the plugin tree so a plugin update cannot wipe the
 # repository config, passphrase or job history.
@@ -106,13 +124,15 @@ log "  Plugin:    $PLUGIN_DIR"
 log "  State:     $DATA_DIR"
 log "  Diagnose:  $PLUGIN_DIR/bin/console borg:status"
 log ""
-log "Next: open Admin Level -> Borg Backup, set a repository, and initialise it."
+log "Next: open Admin Level -> Borg Backup -> Repository and enter the path of"
+log "      the repository this server already backs up to. It is verified with"
+log "      'borg info' and only saved if a repository is really there; the"
+log "      plugin never creates one."
 log ""
 log "NOTE: plugin.conf sets admin_run_as=root and user_run_as=root. This is"
-log "      required, not a convenience: the 'admin' account cannot read"
-log "      /home/<user> (mode 0711), /etc/shadow or the DirectAdmin config, so"
-log "      a backup run as 'admin' exits with a warning and silently archives"
-log "      almost nothing. Putting borg and admin in a shared group does not"
-log "      help: the binary is already world-executable; the unreadable data is"
-log "      the problem."
+log "      required, not a convenience: a root-owned repository is unreadable to"
+log "      the 'admin' account, and a restore has to write into /home/<user>"
+log "      (mode 0711) and give files back their original ownership. Putting"
+log "      borg and admin in a shared group does not help: the binary is already"
+log "      world-executable; the data is the problem."
 exit 0

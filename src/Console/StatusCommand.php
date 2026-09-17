@@ -14,7 +14,7 @@ use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 
 /** Shows plugin state from the shell, for diagnosing a server without the UI. */
-#[AsCommand(name: 'borg:status', description: 'Show repository, schedule and recent job status.')]
+#[AsCommand(name: 'borg:status', description: 'Show the detected repository and recent job status.')]
 final class StatusCommand extends Command
 {
     public function __construct(private readonly Plugin $plugin)
@@ -35,15 +35,13 @@ final class StatusCommand extends Command
             ['borg version' => $runner->version() ?? 'not installed'],
             ['running as uid' => (string) Format::currentUid()],
             ['repository' => $config->repository() ?: 'not configured'],
-            ['encryption' => $config->encryption()],
             ['passphrase stored' => $config->hasPassphrase() ? 'yes' : 'no'],
-            ['schedule' => $config->describeSchedule()],
-            ['cron file' => $this->plugin->cron()->isInstalled() ? $this->plugin->cron()->file() : 'not installed'],
+            ['config file' => $this->plugin->paths->configFile()],
             ['state directory' => $this->plugin->paths->dataDir],
         );
 
         if (Format::currentUid() !== 0) {
-            $io->warning('Not running as root. Backups cannot read /home/<user> (0711) or /etc/shadow.');
+            $io->warning('Not running as root. Restores cannot write into /home/<user> (0711) or set original ownership.');
         }
 
         if (!$runner->isInstalled()) {
@@ -53,6 +51,17 @@ final class StatusCommand extends Command
         }
 
         if ($config->isConfigured()) {
+            $info = $this->plugin->repository()->info();
+            if ($info->isSuccessful()) {
+                $json = $info->json();
+                $io->definitionList(
+                    ['repository id' => (string) ($json['repository']['id'] ?? 'unknown')],
+                    ['encryption' => (string) ($json['encryption']['mode'] ?? 'unknown')],
+                );
+            } else {
+                $io->error('Repository unreadable: ' . $info->errorMessage());
+            }
+
             $listing = $this->plugin->repository()->listArchives();
 
             if ($listing['result']->isSuccessful()) {

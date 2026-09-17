@@ -320,7 +320,6 @@ final class UserPage
             'created_at'  => (string) $job->get('created_at'),
             'started_at'  => (string) $job->get('started_at'),
             'finished_at' => (string) $job->get('finished_at'),
-            'stats'       => $job->stats(),
             'running'     => $job->isRunning(),
         ];
     }

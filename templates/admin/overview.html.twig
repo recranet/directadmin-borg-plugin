@@ -1,42 +1,75 @@
 <div class="borg-card">
-    <h2>Status</h2>
-    <div class="borg-grid">
-        <dl class="borg-stat"><dt>Repository</dt><dd>{{ status.repository ?: 'Not configured' }}</dd></dl>
-        <dl class="borg-stat"><dt>Encryption</dt><dd>{{ status.encryption }}</dd></dl>
-        <dl class="borg-stat"><dt>borg version</dt><dd>{{ borg.version ?: 'not installed' }}</dd></dl>
-        <dl class="borg-stat"><dt>Schedule</dt><dd>{{ status.schedule }}</dd></dl>
-        <dl class="borg-stat"><dt>Last backup</dt><dd>{{ status.last_backup }}</dd></dl>
-        {% if status.archive_count is not null %}
-            <dl class="borg-stat"><dt>Archives</dt><dd>{{ status.archive_count }}</dd></dl>
-        {% endif %}
-        {% if status.repository_size is not null %}
-            <dl class="borg-stat"><dt>Repository size</dt><dd>{{ status.repository_size|bytes }}</dd></dl>
-            <dl class="borg-stat"><dt>Original size</dt><dd>{{ status.original_size|bytes }}</dd></dl>
-        {% endif %}
-    </div>
+    <h2>Repository</h2>
 
-    {% if status.error %}
-        <div class="borg-alert borg-alert-warn" style="margin-top:12px">
-            Could not read the repository: {{ status.error }}
+    {% if not configured %}
+        <p class="borg-empty">
+            No repository set yet. Point the plugin at the one this server already backs up to
+            under <a href="{{ url({ tab: 'repository' }) }}">Repository</a>.
+        </p>
+    {% else %}
+        <div class="borg-grid">
+            <dl class="borg-stat"><dt>Location</dt><dd class="borg-mono">{{ config.repository }}</dd></dl>
+            <dl class="borg-stat">
+                <dt>Status</dt>
+                <dd>
+                    {% if detected.reachable %}
+                        <span class="borg-badge borg-badge-ok">readable</span>
+                    {% else %}
+                        <span class="borg-badge borg-badge-err">unreadable</span>
+                    {% endif %}
+                </dd>
+            </dl>
+            <dl class="borg-stat"><dt>Encryption</dt><dd>{{ detected.encryption ?: 'unknown' }}</dd></dl>
+            <dl class="borg-stat"><dt>borg version</dt><dd>{{ borg.version ?: 'not installed' }}</dd></dl>
+
+            {% if detected.archive_count is not null %}
+                <dl class="borg-stat"><dt>Archives</dt><dd>{{ detected.archive_count }}</dd></dl>
+            {% endif %}
+            {% if detected.last_archive %}
+                {# The newest archive, not a job of ours: the runs that produce
+                   them belong to the server's own backup script. #}
+                <dl class="borg-stat"><dt>Newest archive</dt><dd>{{ detected.last_archive|age }}</dd></dl>
+            {% endif %}
+            {% if detected.unique_size is not null %}
+                <dl class="borg-stat"><dt>Deduplicated</dt><dd>{{ detected.unique_size|bytes }}</dd></dl>
+                <dl class="borg-stat"><dt>Original</dt><dd>{{ detected.total_size|bytes }}</dd></dl>
+            {% endif %}
         </div>
+
+        {% if detected.error %}
+            <div class="borg-alert borg-alert-err" style="margin-top:12px">
+                Could not read the repository: {{ detected.error }}
+            </div>
+        {% endif %}
     {% endif %}
 </div>
 
 {% if configured %}
     <div class="borg-card">
-        <h2>Run now</h2>
+        <h2>Restore</h2>
+        <p>
+            Open <a href="{{ url({ tab: 'archives' }) }}">Archives</a> to browse an archive and
+            restore files, or to restore a whole account.
+        </p>
         <div class="borg-actions">
-            {{ include('admin/_button.html.twig', { action: 'run_backup', label: 'Back up now', class: 'borg-btn-primary' }) }}
-            {{ include('admin/_button.html.twig', { action: 'run_prune', label: 'Prune old archives', class: '' }) }}
+            <a class="borg-btn borg-btn-primary" href="{{ url({ tab: 'archives' }) }}">Browse archives</a>
+        </div>
+    </div>
+
+    <div class="borg-card">
+        <h2>Maintenance</h2>
+        <p class="borg-note" style="margin-top:0">
+            This plugin does not create archives, prune them or run on a schedule &mdash; whatever
+            already backs this server up owns all of that. These two are the exceptions, because
+            both are about being able to read the repository at all.
+        </p>
+        <div class="borg-actions">
             {{ include('admin/_button.html.twig', { action: 'run_check', label: 'Check repository', class: '' }) }}
             {{ include('admin/_button.html.twig', { action: 'break_lock', label: 'Break stale lock', class: 'borg-btn-danger' }) }}
         </div>
-        <p class="borg-note">Backups run in the background; progress is shown under Jobs.</p>
-    </div>
-{% else %}
-    <div class="borg-card">
-        <h2>Get started</h2>
-        <p>Set a repository location under <a href="{{ url({ tab: 'repository' }) }}">Repository</a>,
-           initialise it, then run your first backup.</p>
+        <p class="borg-note">
+            A check reads the whole repository and can take a long time; it runs in the background
+            and reports under Jobs. Break the lock only when no backup or restore is actually running.
+        </p>
     </div>
 {% endif %}

@@ -1,7 +1,8 @@
 {% if not configured %}
     <div class="borg-card">
         <p class="borg-empty">
-            No repository is configured yet. Set one up under <a href="{{ url({ tab: 'repository' }) }}">Repository</a>.
+            No repository is configured yet. Point the plugin at your existing one under
+            <a href="{{ url({ tab: 'repository' }) }}">Repository</a>.
         </p>
     </div>
 {% elseif browser %}
@@ -14,13 +15,6 @@
                 from <span class="borg-mono">{{ user_restore.admin_backups_dir }}</span>,
                 which holds the databases and account configuration.
             </p>
-
-            {% if not user_restore.covered %}
-                <div class="borg-alert borg-alert-warn">
-                    <span class="borg-mono">{{ user_restore.admin_backups_dir }}</span> is not in your
-                    source paths, so this archive has no DirectAdmin backups to restore.
-                </div>
-            {% endif %}
 
             <form method="post" action="{{ url({ tab: 'archives', archive: user_restore.archive }) }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -196,13 +190,18 @@
 {% elseif error %}
     <div class="borg-alert borg-alert-err">Could not list archives: {{ error }}</div>
 {% elseif archives is empty %}
-    <div class="borg-card"><p class="borg-empty">No archives yet. Run a backup from the Overview tab.</p></div>
+    <div class="borg-card">
+        <p class="borg-empty">
+            This repository has no archives yet. They are created by whatever backs this server
+            up, not by this plugin.
+        </p>
+    </div>
 {% else %}
     <div class="borg-card">
         <h2>Archives ({{ archives|length }})</h2>
         <div class="borg-scroll">
             <table class="borg-table">
-                <thead><tr><th>Archive</th><th>Created</th><th>Age</th><th></th></tr></thead>
+                <thead><tr><th>Archive</th><th>Created</th><th>Age</th></tr></thead>
                 <tbody>
                     {% for archive in archives %}
                         <tr>
@@ -211,16 +210,6 @@
                             </td>
                             <td>{{ archive.time|datetime }}</td>
                             <td>{{ archive.time|age }}</td>
-                            <td class="borg-num">
-                                {# Deleting an archive is irreversible, so it takes the exact name typed back. #}
-                                <form method="post" action="{{ url({ tab: 'archives' }) }}" class="borg-inline">
-                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                    <input type="hidden" name="action" value="delete_archive">
-                                    <input type="hidden" name="archive" value="{{ archive.name }}">
-                                    <input type="text" name="confirm" placeholder="type name to delete" style="max-width:220px">
-                                    <button class="borg-btn borg-btn-danger" type="submit">Delete</button>
-                                </form>
-                            </td>
                         </tr>
                     {% endfor %}
                 </tbody>

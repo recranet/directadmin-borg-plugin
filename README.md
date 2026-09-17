@@ -1,12 +1,22 @@
 # DirectAdmin Borg Backup plugin
 
-Manage [BorgBackup](https://www.borgbackup.org/) repositories, schedules and
-restores from inside DirectAdmin.
+Browse and restore from the [BorgBackup](https://www.borgbackup.org/) repository
+your server already backs up to, from inside DirectAdmin.
 
-- **Admin level** — configure the repository, choose what to back up, set a
-  schedule, browse archives, prune, and restore anything to anywhere.
+**This plugin does not take backups.** It creates no repository, writes no
+archive, prunes nothing and installs no schedule. Whatever already fills your
+repository — a cron script, a DirectAdmin hook, borgmatic — keeps doing exactly
+that, untouched. The plugin is the restore end of it.
+
+- **Admin level** — point the plugin at the existing repository, browse its
+  archives, and restore anything to anywhere, including a whole user account.
 - **User level** — each customer can browse their own home directory as it was
   at any backup point and restore files themselves, without a support ticket.
+
+Why split it this way: backup scripts are already solved, usually by something
+older and more carefully tuned than a control-panel plugin. Restores are the
+part that happens under pressure, at two in the morning, by whoever is on call.
+That is the part worth putting a UI on.
 
 Built against the [DirectAdmin Borg
 documentation](https://docs.directadmin.com/directadmin/backup-restore-migration/borg.html)
@@ -80,12 +90,19 @@ apt-get install -y borgbackup                              # Debian / Ubuntu
 **From the release tarball** (ships `vendor/`, so the server needs neither
 composer nor network access):
 
-Admin Level → Plugin Manager → Add Plugin → upload `borg-<version>.tar.gz`.
+Admin Level → Plugin Manager → Add Plugin → upload `borg.tar.gz`.
+
+Upload it under exactly that name. DirectAdmin names the plugin directory after
+the tarball minus `.tar.gz`, and that name is also the URL prefix the menu
+entries use (`/CMD_PLUGINS_ADMIN/borg/`), so anything else installs a plugin
+whose every link and icon 404s. The version is in `plugin.conf`, not the
+filename.
 
 Or from a shell:
 
 ```sh
-tar -xzf borg-1.3.3.tar.gz -C /usr/local/directadmin/plugins/
+mkdir -p /usr/local/directadmin/plugins/borg
+tar -xzf borg.tar.gz -C /usr/local/directadmin/plugins/borg
 sh /usr/local/directadmin/plugins/borg/scripts/install.sh
 ```
 
@@ -96,8 +113,24 @@ directory.
 **From a source checkout**, build the tarball first:
 
 ```sh
-make package      # -> dist/borg-1.3.3.tar.gz
+make package      # -> dist/borg.tar.gz
 ```
+
+### Upgrading from 1.x
+
+2.0 removed the backup side entirely. Upload the new tarball as usual; nothing
+in `/var/lib/directadmin-borg/` is touched, so the repository location and
+passphrase carry over. `install.sh` removes two things a 1.x install could have
+left behind, because both would keep firing at commands that no longer exist:
+
+- `/etc/cron.d/directadmin-borg`, the plugin's own schedule
+- `/usr/local/directadmin/scripts/custom/all_backups_post/borg-plugin.sh`
+
+The retired settings (source paths, compression, retention, schedule) are
+dropped from `config.json` the first time it is saved. **Your own backup script
+and its cron entry are not touched** — the plugin never installed them and does
+not know about them. If you were relying on the plugin to take backups, set up a
+`borg create` cron job before upgrading.
 
 ---
 
@@ -105,38 +138,52 @@ make package      # -> dist/borg-1.3.3.tar.gz
 
 ### First run
 
-1. **Repository** — set the location and encryption mode, and store a passphrase
-   if the mode needs one.
-   - local: `/backup/borg`
-   - remote: `ssh://borgbackup@10.0.0.5:22/backups/$(hostname -f)`
-   - remote (scp-style): `borgbackup@10.0.0.5:/backups/host`
+**Repository** — enter the location your backups already go to, and save.
 
-   For a remote repository, set up key-based SSH from root to the backup user
-   first, then point **SSH command** at the key:
-   `ssh -i /root/.ssh/borg_ed25519 -o StrictHostKeyChecking=yes`.
+- local: `/mnt/bigstorage/borg/$(hostname)`
+- remote: `ssh://borgbackup@10.0.0.5:22/backups/$(hostname -f)`
+- remote (scp-style): `borgbackup@10.0.0.5:/backups/host`
 
-2. **Initialise** — creates the empty repository. Safe to run against an
-   existing one: borg refuses and nothing changes.
+The exact path matters: borg repositories are normally per-host, so
+`/mnt/bigstorage/borg` is usually the *parent* of the one you want. Read it out
+of the script that runs your backups rather than typing it from memory.
 
-3. **Backup** — review the source paths, retention and schedule, then save.
+The location is verified before it is stored. The plugin runs `borg info`
+against it and saves only if borg finds a repository there; otherwise it says so
+and keeps the previous setting. There is no "initialise" button, deliberately —
+a mistyped path that silently created a second, empty repository would look like
+a working configuration right up until the moment someone needed a restore.
 
-4. **Overview → Back up now** — the first run is the slow one; borg deduplicates
-   everything after it.
+For an encrypted repository, store the passphrase in the same form. For a remote
+one, set **SSH command** to whatever your backup script exports as `BORG_RSH`,
+e.g. `ssh -i /root/.ssh/borg_hetzner -p 23`. Both are needed for the
+verification to pass, so a missing key is caught now rather than during a
+recovery.
 
-### What is backed up by default
+Settings are stored in `/var/lib/directadmin-borg/config.json` (mode 0600),
+outside the plugin directory, so a plugin update does not lose them.
 
+### What gets backed up, and by what
+
+Not by this plugin. Whatever writes to the repository decides what is in it —
+typically a script like:
+
+```sh
+REPOSITORY=/mnt/bigstorage/borg/`hostname`
+
+borg create -v --stats $REPOSITORY::'{fqdn}-{now:%Y-%m-%d_%H:%M}' \
+    /home /etc /usr/local/directadmin /var/log --exclude /home/mysql
+
+borg prune -v $REPOSITORY --prefix '{fqdn}-' --keep-daily=14 --keep-weekly=8
 ```
-/home
-/etc
-/usr/local/directadmin/conf
-/usr/local/directadmin/data/users
-```
 
-Databases are **not** dumped by this plugin. DirectAdmin dumps them into its own
-per-user backups under `/home/admin/admin_backups/`, which `/home` already
-covers — but only if a DirectAdmin backup run has actually happened. Enable
-**“Also run after DirectAdmin's own backups finish”** so a borg archive is taken
-once those files exist, and the two stay in step.
+Two things there decide what you can restore, so they are worth checking:
+
+- **`/home` must be included**, or there is nothing to give a customer back.
+- **DirectAdmin's own per-user backups must be included.** Databases are not in
+  a home directory; DirectAdmin dumps them into `/home/admin/admin_backups/`,
+  which `/home` covers — but only once a DirectAdmin backup run has happened.
+  Restoring a whole account needs both, from the same archive.
 
 ### What a borg "version" is
 
@@ -166,13 +213,11 @@ are consistent with each other.
 
 ### Retention
 
-Pruning runs after each backup, inside the same repository lock, scoped to the
-configured **archive prefix** — so it can never delete archives another tool
-wrote to the same repository. A rule set to `0` is disabled; with all three at
-`0`, nothing is ever pruned.
-
-With borg 1.2+, **compact** runs after pruning to actually reclaim the disk
-space.
+Also not this plugin's. Retention is whatever your `borg prune` invocation says,
+and the plugin will not prune, compact or delete an archive — there is no UI for
+it and no code path to it. This is on purpose: the plugin cannot know which
+archives in a shared repository belong to which producer, and deleting the wrong
+one is not recoverable.
 
 ### Restores
 
@@ -184,8 +229,8 @@ their full original path, so `/home/alice/x` lands at
 
 **Users** browse their own home directory at a chosen backup date and restore
 into `/home/<user>/borg_restore/`, chowned back to them. Their live files are
-never touched. Turn the whole feature off with **User restores → Let users
-restore their own files**.
+never touched. Turn the whole feature off with **Repository → Let users restore
+their own files**.
 
 ### Restoring a whole user
 
@@ -280,18 +325,18 @@ not included.
 /usr/local/directadmin/plugins/borg/bin/console borg:status
 ```
 
-Shows the borg version, the uid the plugin runs as, the repository, the
-schedule, recent archives and recent jobs — useful when the UI is not the
-fastest way to find out why last night's backup failed.
-
-Other commands (normally invoked by cron, the hook, or the UI):
+Shows the borg version, the uid the plugin runs as, the configured repository
+and what borg reports about it (id, encryption mode), recent archives and recent
+jobs — the fastest way to find out whether the plugin can read the repository at
+all, and whether last night's backup actually wrote anything.
 
 | Command | Purpose |
 |---|---|
 | `borg:status` | Diagnostics |
-| `borg:scheduled-backup` | What `/etc/cron.d/directadmin-borg` runs |
-| `borg:job <id>` | Runs one queued job; the detached worker |
-| `borg:hook-backup <trigger>` | Backup from a DirectAdmin hook, if enabled |
+| `borg:job <id>` | Runs one queued job; the detached worker behind restores and checks |
+
+There is no scheduled-backup or hook command: this plugin is never the thing
+that runs a backup.
 
 ---
 
@@ -301,14 +346,13 @@ Other commands (normally invoked by cron, the hook, or the UI):
 plugin.conf              admin_run_as=root, user_run_as=root, menu entries
 bootstrap.php            SAPI/PHP-version guard, autoloader, umask
 admin/, user/            DirectAdmin entry points (index.html, status.raw, menu.raw)
-bin/console              Symfony Console app: worker, cron, hook, diagnostics
-hooks/                   all_backups_post.sh, classic-skin menu fragments
+bin/console              Symfony Console app: detached worker, diagnostics
+hooks/                   classic-skin menu fragments
 src/
-  Borg/                  borg CLI wrapper and repository operations
+  Borg/                  borg CLI wrapper and read-only repository operations
   Config/                configuration, validation constraints
   Http/                  DirectAdmin request decoding, JSON status endpoint
-  Job/                   job records, dispatch, execution
-  Schedule/              /etc/cron.d management
+  Job/                   job records, dispatch, execution (restore and check)
   Security/              path confinement, account resolution, CSRF
   Ui/                    page controllers
 templates/               Twig templates (auto-escaped)
@@ -317,11 +361,13 @@ test/                    Docker harness and suite
 
 State lives in `/var/lib/directadmin-borg/` — **outside** the plugin directory,
 because DirectAdmin replaces the whole plugin tree on update and would otherwise
-take the repository config, passphrase and job history with it.
+take the repository location, passphrase and job history with it. That is also
+why the repository path is stored there rather than in the plugin's own
+directory: an update must not silently leave the plugin pointing at nothing.
 
 ```
 /var/lib/directadmin-borg/
-  config.json      0600   settings
+  config.json      0600   repository location and restore settings
   passphrase       0600   borg passphrase, kept apart from the config
   csrf.key         0600   HMAC key for form tokens
   jobs/            0700   one JSON record per job
@@ -336,11 +382,11 @@ take the repository config, passphrase and job history with it.
 |---|---|
 | `symfony/process` | Running borg with an argument array — repository names, archive names and paths reach `execve()` directly and can never be shell syntax. Also gives timeouts and live output streaming for job logs. |
 | `symfony/filesystem` | `dumpFile()` writes config and job records atomically, so a crash mid-write cannot truncate them. Plus ownership handling for restores. |
-| `symfony/validator` | Configuration rules as declarative constraints, including a custom `CronField` constraint, since those values are written into `/etc/cron.d`. |
-| `symfony/lock` | The repository lock, so a scheduled run overlapping a manual one becomes a clear "already running" instead of a borg lock error. |
+| `symfony/validator` | Configuration rules as declarative constraints — the repository location and `BORG_RSH` both end up on a borg command line, so the rules are about safety as much as correctness. |
+| `symfony/lock` | The repository lock, so two overlapping repository checks become a clear "already running" instead of a borg lock error. Restores deliberately do not take it. |
 | `symfony/finder` | Job listing and recursive ownership fixes. |
 | `symfony/http-foundation` | Rebuilding a real `Request` from DirectAdmin's environment variables, for typed input access. |
-| `symfony/console` | The worker, cron entry point, hook and diagnostics. |
+| `symfony/console` | The detached worker and the diagnostics command. |
 | `twig/twig` | Auto-escaped templates — every value on these pages is a path, an archive name or a borg error message, and all three are attacker-influenced. |
 
 ### How long-running work is handled
@@ -409,11 +455,11 @@ dnf -y install borgbackup
 | `alma8` | 8.2 | **1.1.18** (EPEL 8) | Still widely deployed, and the only place borg 1.1 still ships |
 | `alma9-borg14` | 8.2 | 1.4.5 (pip) | **Opt-in.** Not in the default run |
 
-The spread across those two axes is the point. borg 1.1 prunes with `--prefix`
-and has no `compact` command; 1.2 renamed the flag to `--glob-archives` and
-added compaction. The plugin feature-detects rather than assuming, and `alma8`
-is what proves the older branch works against a real borg 1.1 rather than a
-stub.
+The spread across those two axes is the point. The commands a restore needs are
+spelled the same on 1.1 as on 1.4, but that is an assertion, not an assumption:
+`alma8` is what proves it against a real borg 1.1 rather than a stub. (Dropping
+the backup side removed the flags that actually differed between them —
+`--prefix` versus `--glob-archives`, and `compact`.)
 
 PHP is 8.2 on both, which is what the servers run. The plugin still declares
 8.1 as its floor, and that floor is held by `make lint` and `make stan`, which
@@ -433,23 +479,36 @@ DirectAdmin does — environment in, stdout out.
 
 No DirectAdmin server is involved, and nothing outside the container is touched.
 
+The repository is created and filled by the suite itself, shelling out to borg
+directly, standing in for the server's own backup script. The plugin is only
+ever pointed at the result — so if a change ever made the plugin start writing
+archives, the archive counts would stop matching.
+
 The suite covers path confinement and traversal, cross-account access through
 both the page and the worker, CSRF, the DirectAdmin env-decoding path, template
-escaping, repository locking, cron file generation, prune scoping, detached
-dispatch, secret handling and file permissions — including the restore-a-user
-flow and its refusal to touch a home directory for an account DirectAdmin does
-not have — and ends with the privilege probe that produced the table above.
+escaping, repository locking, detached dispatch, secret handling and file
+permissions — including the restore-a-user flow and its refusal to touch a home
+directory for an account DirectAdmin does not have — and ends with the privilege
+probe that produced the table above.
 
 It also exercises the parts that are easy to leave untested because they need a
 real environment:
 
-- every admin form action end to end, including the archive deletion guard
-- an **encrypted** repository: init, backup, list, restore, and that the
-  passphrase never reaches a command line
-- a **remote** repository over `ssh://`, against an sshd in the container
-- borg **1.1**'s `--prefix` pruning, via a stub reporting that version, so the
-  older branch is covered without a second borg installation
-- the DirectAdmin hook, the scheduled-backup command, and `uninstall.sh`
+- every admin form action end to end
+- that a path holding no repository is **refused** rather than initialised, that
+  an existing directory which is not a repository is refused too, and that
+  neither leaves anything behind on disk or disturbs the stored location
+- that the retired backup actions (`init_repository`, `save_backup`,
+  `run_backup`, `run_prune`, `delete_archive`) are rejected outright, and that
+  rejecting them touched nothing in the repository
+- that every admin tab actually renders — these run on `php -n`, where a Twig
+  filter needing mbstring or iconv fatals at render time and is invisible to
+  `make lint`
+- an **encrypted** repository: read, list, restore, that the passphrase never
+  reaches a command line, and that an unreadable one is not saved as if fine
+- a **remote** repository over `ssh://`, against an sshd in the container,
+  including that a wrong `BORG_RSH` is caught at save time
+- `uninstall.sh`, including clearing a schedule left behind by a 1.x install
 - job retention, oversized directory listings, and log tailing past 64 KB
 
 ---
@@ -460,10 +519,15 @@ real environment:
 sh /usr/local/directadmin/plugins/borg/scripts/uninstall.sh
 ```
 
-Removes the schedule. It deliberately leaves `/var/lib/directadmin-borg/` and
-the borg repository alone — deleting a customer's only backup because a plugin
-was removed is not a decision an uninstaller gets to make. Remove them by hand
-when you mean it.
+There is very little to undo: the plugin only ever read the repository. What it
+does clear is what versions before 2.0 could install back when they still ran
+backups — a cron schedule and a DirectAdmin hook, both of which would otherwise
+keep firing at commands this version no longer has.
+
+It deliberately leaves `/var/lib/directadmin-borg/`, the borg repository, and
+whatever actually writes to that repository alone — deleting a customer's only
+backup because a plugin was removed is not a decision an uninstaller gets to
+make. Remove them by hand when you mean it.
 
 ---
 

@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Recranet\DirectAdminBorg\Job;
 
-use Recranet\DirectAdminBorg\Borg\BorgResult;
 use Recranet\DirectAdminBorg\Borg\BorgRunner;
 use Recranet\DirectAdminBorg\Borg\Repository;
 use Recranet\DirectAdminBorg\Config\Configuration;
@@ -48,8 +47,8 @@ final class JobRunner
                 return $this->finish($job, Job::STATUS_FAILED, 2, 'No repository is configured.');
             }
 
-            // Restores only read, so they may run alongside a backup; every
-            // other type writes and must hold the repository lock.
+            // A restore may always run: it must stay possible while a check,
+            // or the server's own backup cron, has the repository busy.
             if (\in_array($job->type(), Job::EXCLUSIVE_TYPES, true)) {
                 $this->lock = $this->plugin->lockFactory()->createLock(self::LOCK_KEY, 86400.0, false);
                 if (!$this->lock->acquire()) {
@@ -66,8 +65,6 @@ final class JobRunner
             ));
 
             return match ($job->type()) {
-                Job::TYPE_BACKUP  => $this->runBackup($job, $config, $repository),
-                Job::TYPE_PRUNE   => $this->runPrune($job, $config, $repository),
                 Job::TYPE_CHECK   => $this->runCheck($job, $repository),
                 Job::TYPE_RESTORE => $this->runRestore($job, $config, $repository),
                 default           => $this->finish($job, Job::STATUS_FAILED, 2, 'Unknown job type: ' . $job->type()),
@@ -82,108 +79,6 @@ final class JobRunner
             $this->releaseLock();
             $this->jobs->purgeOlderThan(30);
         }
-    }
-
-    private function runBackup(Job $job, Configuration $config, Repository $repository): int
-    {
-        $this->log($job, \sprintf('Archiving %d source path(s).', \count($config->sourcePaths())));
-
-        $result = $repository->runner()->run(
-            $repository->createArguments(),
-            BorgRunner::NO_TIMEOUT,
-            $this->sink($job)
-        );
-
-        $stats = $this->extractStats($result);
-
-        if (!$result->isSuccessful()) {
-            $message = $result->errorMessage();
-
-            // A template without enough resolution (say {now:%Y-%m-%d}) collides
-            // as soon as a second backup runs the same day, and borg's own
-            // "Archive X already exists" gives no hint about where to fix it.
-            if (stripos($message, 'already exists') !== false) {
-                $message .= \sprintf(
-                    ' The archive name template ("%s") does not produce a unique name for this run.'
-                    . ' Add more precision, for example {now:%%Y-%%m-%%d_%%H:%%M:%%S}.',
-                    $config->archiveName()
-                );
-            }
-
-            return $this->finish($job, Job::STATUS_FAILED, $result->exitCode, 'Backup failed: ' . $message, $stats);
-        }
-
-        $status = $result->isWarning() ? Job::STATUS_WARNING : Job::STATUS_SUCCESS;
-        $message = $result->isWarning()
-            ? 'Archive created, but borg reported warnings (see log).'
-            : 'Archive created.';
-
-        // Prune inside the same job so it happens under the same repository
-        // lock, and so an unattended schedule cannot let the repository grow
-        // without bound.
-        if (!empty($job->params()['prune'])) {
-            $pruneArguments = $repository->pruneArguments();
-
-            if ($pruneArguments !== null) {
-                $this->log($job, 'Pruning old archives.');
-                $prune = $repository->runner()->run($pruneArguments, BorgRunner::NO_TIMEOUT, $this->sink($job));
-
-                if (!$prune->isSuccessful()) {
-                    return $this->finish(
-                        $job,
-                        Job::STATUS_WARNING,
-                        $prune->exitCode,
-                        $message . ' Prune failed: ' . $prune->errorMessage(),
-                        $stats
-                    );
-                }
-
-                $message .= ' Old archives pruned.';
-
-                if ($config->compactAfterPrune() && $repository->runner()->supportsCompact()) {
-                    $this->log($job, 'Compacting the repository to reclaim space.');
-                    $compact = $repository->runner()->run($repository->compactArguments(), BorgRunner::NO_TIMEOUT, $this->sink($job));
-
-                    if (!$compact->isSuccessful()) {
-                        $message .= ' Compact failed (see log).';
-                        $status = Job::STATUS_WARNING;
-                    } else {
-                        $message .= ' Repository compacted.';
-                    }
-                }
-            }
-        }
-
-        return $this->finish($job, $status, $result->exitCode, $message, $stats);
-    }
-
-    private function runPrune(Job $job, Configuration $config, Repository $repository): int
-    {
-        $arguments = $repository->pruneArguments();
-        if ($arguments === null) {
-            return $this->finish($job, Job::STATUS_FAILED, 2, 'Pruning is disabled in the plugin settings.');
-        }
-
-        $this->log($job, 'Pruning old archives.');
-        $result = $repository->runner()->run($arguments, BorgRunner::NO_TIMEOUT, $this->sink($job));
-
-        if (!$result->isSuccessful()) {
-            return $this->finish($job, Job::STATUS_FAILED, $result->exitCode, 'Prune failed: ' . $result->errorMessage());
-        }
-
-        $message = 'Old archives pruned.';
-
-        if ($config->compactAfterPrune() && $repository->runner()->supportsCompact()) {
-            $this->log($job, 'Compacting the repository to reclaim space.');
-            $compact = $repository->runner()->run($repository->compactArguments(), BorgRunner::NO_TIMEOUT, $this->sink($job));
-
-            if (!$compact->isSuccessful()) {
-                return $this->finish($job, Job::STATUS_WARNING, $compact->exitCode, $message . ' Compact failed: ' . $compact->errorMessage());
-            }
-            $message .= ' Repository compacted.';
-        }
-
-        return $this->finish($job, Job::STATUS_SUCCESS, $result->exitCode, $message);
     }
 
     private function runCheck(Job $job, Repository $repository): int
@@ -322,27 +217,6 @@ final class JobRunner
         return $path;
     }
 
-    /** @return array<string,mixed>|null */
-    private function extractStats(BorgResult $result): ?array
-    {
-        $decoded = $result->json();
-        if (!isset($decoded['archive']) || !\is_array($decoded['archive'])) {
-            return null;
-        }
-
-        $archive = $decoded['archive'];
-        $stats = \is_array($archive['stats'] ?? null) ? $archive['stats'] : [];
-
-        return [
-            'archive'           => $archive['name'] ?? null,
-            'duration'          => $archive['duration'] ?? null,
-            'original_size'     => $stats['original_size'] ?? null,
-            'compressed_size'   => $stats['compressed_size'] ?? null,
-            'deduplicated_size' => $stats['deduplicated_size'] ?? null,
-            'nfiles'            => $stats['nfiles'] ?? null,
-        ];
-    }
-
     /** Streams borg's output into the job log so the UI can tail it live. */
     private function sink(Job $job): callable
     {
@@ -362,14 +236,13 @@ final class JobRunner
         $this->lock = null;
     }
 
-    /** @param array<string,mixed>|null $stats */
-    private function finish(Job $job, string $status, int $exitCode, string $message, ?array $stats = null): int
+    private function finish(Job $job, string $status, int $exitCode, string $message): int
     {
         $this->log($job, $message);
 
         // Release before the job is marked finished, not after. Otherwise there
-        // is a window where the UI shows a completed backup while the lock is
-        // still held, and the next run is refused as "already running".
+        // is a window where the UI shows a completed check while the lock is
+        // still held, and the next one is refused as "already running".
         $this->releaseLock();
 
         $this->jobs->update($job, [
@@ -377,7 +250,6 @@ final class JobRunner
             'exit_code'   => $exitCode,
             'finished_at' => date('c'),
             'message'     => $message,
-            'stats'       => $stats,
         ]);
 
         return $status === Job::STATUS_FAILED ? 1 : 0;

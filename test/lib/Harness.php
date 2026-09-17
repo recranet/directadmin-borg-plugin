@@ -30,7 +30,6 @@ final class Harness
     public function __construct(
         private readonly string $pluginDir,
         private readonly string $dataDir = '/tmp/borg-plugin-test-data',
-        private readonly string $cronFile = '/tmp/borg-plugin-test-cron',
     ) {
         $this->filesystem = new Filesystem();
     }
@@ -40,7 +39,6 @@ final class Harness
     {
         $this->filesystem->remove([
             $this->dataDir,
-            $this->cronFile,
             '/backup/test-repo',
             '/backup/probe-root',
             '/backup/probe-admin',
@@ -61,9 +59,8 @@ final class Harness
     public function environment(): array
     {
         return [
-            'BORG_PLUGIN_DATA_DIR'  => $this->dataDir,
-            'BORG_PLUGIN_CRON_FILE' => $this->cronFile,
-            'BORG_PLUGIN_HOME'      => '/root',
+            'BORG_PLUGIN_DATA_DIR' => $this->dataDir,
+            'BORG_PLUGIN_HOME'     => '/root',
         ];
     }
 

@@ -17,7 +17,7 @@ help:
 	@echo "make cs        Coding standards, report only"
 	@echo "make cs-fix    Coding standards, apply fixes"
 	@echo "make lint      Parse-check PHP and compile every Twig template"
-	@echo "make package   Build dist/borg-<version>.tar.gz for DirectAdmin"
+	@echo "make package   Build dist/borg.tar.gz for DirectAdmin"
 	@echo "make install   Install composer dependencies locally"
 	@echo "make clean     Remove build output and tool caches"
 

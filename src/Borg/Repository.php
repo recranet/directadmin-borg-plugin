@@ -9,6 +9,12 @@ use Recranet\DirectAdminBorg\Security\PathGuard;
 
 /**
  * The configured borg repository, as operations rather than command lines.
+ *
+ * Read-only by design. The repository belongs to whatever already backs this
+ * server up, so nothing here creates, writes to, prunes or deletes from it:
+ * the only mutating calls left are break-lock, which releases a lock this
+ * plugin or a crashed run left behind, and extract, which writes outside the
+ * repository.
  */
 final class Repository
 {
@@ -39,11 +45,6 @@ final class Repository
         return $this->location() . '::' . $archive;
     }
 
-    public function initialize(): BorgResult
-    {
-        return $this->borg->run(['init', '--encryption=' . $this->config->encryption(), $this->location()], 120);
-    }
-
     public function info(): BorgResult
     {
         return $this->borg->run(['info', '--json', $this->location()], 60);
@@ -52,11 +53,6 @@ final class Repository
     public function breakLock(): BorgResult
     {
         return $this->borg->run(['break-lock', $this->location()], 60);
-    }
-
-    public function deleteArchive(string $archive): BorgResult
-    {
-        return $this->borg->run(['delete', $this->archiveRef($archive)], 600);
     }
 
     /**
@@ -195,67 +191,6 @@ final class Repository
         }
 
         return null;
-    }
-
-    /** Arguments for a backup run. */
-    /** @return string[] */
-    public function createArguments(): array
-    {
-        $arguments = ['create', '--stats', '--json', '--compression', $this->config->compression()];
-
-        if ($this->config->oneFileSystem()) {
-            $arguments[] = '--one-file-system';
-        }
-        foreach ($this->config->excludePatterns() as $pattern) {
-            $arguments[] = '--exclude';
-            $arguments[] = $pattern;
-        }
-
-        $arguments[] = $this->archiveRef($this->config->archiveName());
-
-        foreach ($this->config->sourcePaths() as $path) {
-            $arguments[] = $path;
-        }
-
-        return $arguments;
-    }
-
-    /**
-     * Arguments for pruning, or null when pruning is switched off.
-     *
-     * @return string[]|null
-     */
-    public function pruneArguments(): ?array
-    {
-        if (!$this->config->pruneEnabled()) {
-            return null;
-        }
-
-        $arguments = ['prune', '--stats'];
-
-        $prefix = $this->config->archivePrefix();
-        if ($prefix !== '') {
-            // Scope pruning to this plugin's own archives so it can never
-            // delete archives another tool wrote to the same repository.
-            $arguments[] = $this->borg->supportsGlobArchives() ? '--glob-archives' : '--prefix';
-            $arguments[] = $this->borg->supportsGlobArchives() ? $prefix . '*' : $prefix;
-        }
-
-        foreach (['daily' => $this->config->keepDaily(), 'weekly' => $this->config->keepWeekly(), 'monthly' => $this->config->keepMonthly()] as $unit => $count) {
-            if ($count > 0) {
-                $arguments[] = \sprintf('--keep-%s=%d', $unit, $count);
-            }
-        }
-
-        $arguments[] = $this->location();
-
-        return $arguments;
-    }
-
-    /** @return string[] */
-    public function compactArguments(): array
-    {
-        return ['compact', $this->location()];
     }
 
     /**

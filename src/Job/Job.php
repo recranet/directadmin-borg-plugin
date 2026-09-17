@@ -13,15 +13,20 @@ final class Job
     public const STATUS_WARNING = 'warning';
     public const STATUS_FAILED = 'failed';
 
-    public const TYPE_BACKUP = 'backup';
-    public const TYPE_PRUNE = 'prune';
     public const TYPE_CHECK = 'check';
     public const TYPE_RESTORE = 'restore';
 
-    public const TYPES = [self::TYPE_BACKUP, self::TYPE_PRUNE, self::TYPE_CHECK, self::TYPE_RESTORE];
+    public const TYPES = [self::TYPE_CHECK, self::TYPE_RESTORE];
 
-    /** Types that write to the repository and must not overlap. */
-    public const EXCLUSIVE_TYPES = [self::TYPE_BACKUP, self::TYPE_PRUNE, self::TYPE_CHECK];
+    /**
+     * Types that take the repository lock and must not overlap.
+     *
+     * A check only reads, but it reads the whole repository and holds borg's
+     * own lock while it does, so letting two run at once just makes both slow.
+     * Restores are excluded on purpose: they must stay possible while a check,
+     * or the server's own backup cron, is running.
+     */
+    public const EXCLUSIVE_TYPES = [self::TYPE_CHECK];
 
     /** @param array<string,mixed> $data */
     public function __construct(
@@ -101,14 +106,6 @@ final class Job
         $params = $this->data['params'] ?? [];
 
         return \is_array($params) ? $params : [];
-    }
-
-    /** @return array<string,mixed>|null */
-    public function stats(): ?array
-    {
-        $stats = $this->data['stats'] ?? null;
-
-        return \is_array($stats) ? $stats : null;
     }
 
     public function isFinished(): bool

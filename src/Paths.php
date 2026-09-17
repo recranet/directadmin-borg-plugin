@@ -24,7 +24,6 @@ final class Paths
     /** Environment variable names that must reach a detached child process. */
     public const FORWARDED_ENV = [
         'BORG_PLUGIN_DATA_DIR',
-        'BORG_PLUGIN_CRON_FILE',
         'BORG_PLUGIN_PASSWD_FILE',
         'BORG_PLUGIN_DA_USERS_DIR',
         'BORG_PLUGIN_HOME',
@@ -33,7 +32,6 @@ final class Paths
 
     public function __construct(
         public readonly string $dataDir,
-        public readonly string $cronFile,
         public readonly string $passwdFile,
         public readonly string $daUsersDir,
         public readonly string $borgHome,
@@ -44,7 +42,6 @@ final class Paths
     {
         return new self(
             self::env('BORG_PLUGIN_DATA_DIR', '/var/lib/directadmin-borg'),
-            self::env('BORG_PLUGIN_CRON_FILE', '/etc/cron.d/directadmin-borg'),
             self::env('BORG_PLUGIN_PASSWD_FILE', '/etc/passwd'),
             self::env('BORG_PLUGIN_DA_USERS_DIR', '/usr/local/directadmin/data/users'),
             self::env('BORG_PLUGIN_HOME', '/root'),

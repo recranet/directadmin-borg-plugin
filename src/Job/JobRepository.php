@@ -42,7 +42,6 @@ final class JobRepository
             'exit_code'   => null,
             'message'     => '',
             'params'      => $params,
-            'stats'       => null,
         ]);
         $job->set(['id' => $job->id]);
 

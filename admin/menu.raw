@@ -14,8 +14,8 @@ $updates = 0;
 try {
     $plugin = Plugin::boot(dirname(__DIR__));
 
-    // Surface a failed backup as a notification badge on the menu entry.
-    foreach ($plugin->jobs()->recent(5, null, Job::TYPE_BACKUP) as $job) {
+    // Surface a failed restore as a notification badge on the menu entry.
+    foreach ($plugin->jobs()->recent(5, null, Job::TYPE_RESTORE) as $job) {
         if ($job->isFinished()) {
             $updates = $job->status() === Job::STATUS_FAILED ? 1 : 0;
             break;

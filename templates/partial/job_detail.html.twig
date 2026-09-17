@@ -11,12 +11,6 @@
         </dl>
         <dl class="borg-stat"><dt>Started</dt><dd>{{ job.started_at|datetime }}</dd></dl>
         <dl class="borg-stat"><dt>Finished</dt><dd>{{ job.finished_at|datetime }}</dd></dl>
-
-        {% if job.stats %}
-            <dl class="borg-stat"><dt>Files</dt><dd>{{ job.stats.nfiles ?? '-' }}</dd></dl>
-            <dl class="borg-stat"><dt>Original</dt><dd>{{ job.stats.original_size|bytes }}</dd></dl>
-            <dl class="borg-stat"><dt>Deduplicated</dt><dd>{{ job.stats.deduplicated_size|bytes }}</dd></dl>
-        {% endif %}
     </div>
 
     {% if job.message %}<p>{{ job.message }}</p>{% endif %}

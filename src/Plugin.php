@@ -9,7 +9,6 @@ use Recranet\DirectAdminBorg\Borg\Repository;
 use Recranet\DirectAdminBorg\Config\ConfigRepository;
 use Recranet\DirectAdminBorg\Job\JobDispatcher;
 use Recranet\DirectAdminBorg\Job\JobRepository;
-use Recranet\DirectAdminBorg\Schedule\CronWriter;
 use Recranet\DirectAdminBorg\Ui\TemplateRenderer;
 use Symfony\Component\Filesystem\Filesystem;
 use Symfony\Component\Lock\LockFactory;
@@ -37,7 +36,6 @@ final class Plugin
     private ?BorgRunner $borg = null;
     private ?JobRepository $jobs = null;
     private ?JobDispatcher $dispatcher = null;
-    private ?CronWriter $cron = null;
     private ?LockFactory $lockFactory = null;
     private ?TemplateRenderer $renderer = null;
 
@@ -105,22 +103,13 @@ final class Plugin
         return $this->dispatcher ??= new JobDispatcher($this->pluginDir);
     }
 
-    public function cron(): CronWriter
-    {
-        return $this->cron ??= new CronWriter(
-            $this->pluginDir,
-            $this->paths,
-            $this->filesystem()
-        );
-    }
-
     /**
-     * Lock guarding every operation that writes to the borg repository.
+     * Lock guarding repository-wide operations.
      *
      * Borg locks the repository itself, but acquiring here means the UI can say
-     * "a backup is already running" instead of surfacing a borg lock error, and
-     * a scheduled run overlapping a manual one becomes a no-op rather than a
-     * failure.
+     * "a check is already running" instead of surfacing a borg lock error.
+     * Restores do not take it: they must stay possible while a check, or the
+     * server's own backup run, has the repository busy.
      */
     public function lockFactory(): LockFactory
     {
