@@ -405,7 +405,7 @@ $t->ok($index->includesFiles($archive), 'and comes back with files in it');
 
 $noArchive = $plugin->jobs()->create(Job::TYPE_INDEX, 'test', []);
 $t->is($runJob($noArchive), 1, 'an index job with no archive name fails');
-$t->contains($plugin->jobs()->find($noArchive->id)->message(), 'missing an archive name', 'and says why');
+$t->contains($plugin->jobs()->find($noArchive->id)->message(), 'missing a backup name', 'and says why');
 
 $t->group('Listing is streamed, not buffered');
 
@@ -564,7 +564,7 @@ $out = $t->page('user', 'alice', ['archive' => $archive, 'path' => '/etc']);
 $t->notContains($out, 'passwd', 'browsing /etc is impossible at user level');
 
 $out = $t->page('user', 'alice', ['archive' => 'no-such-archive']);
-$t->contains($out, 'Unknown archive', 'an unknown archive name is rejected');
+$t->contains($out, 'Unknown backup', 'an unknown archive name is rejected');
 
 $t->group('An account panel at User Level too');
 
@@ -656,7 +656,7 @@ $t->is(
 );
 
 $out = $restoreTree('restore_domains', ['confirm' => '1', 'archive' => 'no-such-archive']);
-$t->contains($out, 'Unknown archive', 'an unknown archive is rejected here too');
+$t->contains($out, 'Unknown backup', 'an unknown archive is rejected here too');
 
 $out = $t->page('user', 'alice', [], [
     'action'  => 'restore_domains',
@@ -689,7 +689,7 @@ $out = $t->page('user', 'alice', [], [
     'paths'      => ['/home/alice/domains'],
     'csrf_token' => $userToken,
 ], 'POST');
-$t->contains($out, 'Unknown archive', 'a restore from an unknown archive is rejected');
+$t->contains($out, 'Unknown backup', 'a restore from an unknown archive is rejected');
 
 $t->group('Escaping');
 
@@ -780,7 +780,7 @@ $t->notContains($t->page('admin'), '>Backup<', 'there is no Backup tab');
 $t->contains($t->page('admin', 'admin', ['tab' => 'backup']), 'Borg Backup', 'the retired tab name falls back to Overview');
 
 $overview = $t->page('admin');
-$t->contains($overview, 'Newest archive', 'the overview reports the newest archive it found');
+$t->contains($overview, 'Newest backup', 'the overview reports the newest archive it found');
 $t->notContains($overview, 'Back up now', 'the overview offers no way to start a backup');
 $t->notContains($overview, 'Prune', 'the overview offers no way to prune');
 
@@ -1273,7 +1273,7 @@ $t->contains($out, 'Refusing to restore directly into', 'the free-form restore s
 $t->group('Restore-a-user guards');
 
 $t->contains($restoreUser('alice', '/'), 'Refusing to restore directly into', 'protected destinations still apply');
-$t->contains($restoreUser(''), 'Choose an archive and a username', 'a blank username is rejected');
+$t->contains($restoreUser(''), 'Choose a backup and a username', 'a blank username is rejected');
 $t->contains($restoreUser('../../etc'), 'Invalid account name', 'a traversal attempt in the username is rejected');
 
 // A user with no DirectAdmin backup in this archive still gets their home back,

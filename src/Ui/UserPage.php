@@ -177,7 +177,7 @@ final class UserPage
 
         $archive = $this->request->body()->getString('archive');
         if ($archive === '' || !isset($this->archiveTimes()[$archive])) {
-            throw new BorgPluginException('Unknown archive.');
+            throw new BorgPluginException('Unknown backup.');
         }
 
         $target = AccountTreeRestore::path($account, $tree);
@@ -217,7 +217,7 @@ final class UserPage
         // rather than passing an arbitrary string to borg.
         $archive = $this->request->body()->getString('archive');
         if ($archive === '' || !isset($this->archiveTimes()[$archive])) {
-            throw new BorgPluginException('Unknown archive.');
+            throw new BorgPluginException('Unknown backup.');
         }
 
         $paths = $this->request->bodyList('paths');
@@ -288,7 +288,7 @@ final class UserPage
     private function browserContext(string $archive, Account $account): array
     {
         if (!isset($this->archiveTimes()[$archive])) {
-            $this->flash->error('Unknown archive.');
+            $this->flash->error('Unknown backup.');
 
             return ['archive' => $archive, 'missing' => true, 'entries' => [], 'crumbs' => [], 'truncated' => false,
                 'taken_at'    => '', 'restore_dir' => ''];
@@ -331,7 +331,7 @@ final class UserPage
     private function panelContext(string $archive, Account $account): array
     {
         if (!isset($this->archiveTimes()[$archive])) {
-            $this->flash->error('Unknown archive.');
+            $this->flash->error('Unknown backup.');
 
             return ['archive' => $archive, 'missing' => true, 'taken_at' => '', 'home' => $account->home];
         }

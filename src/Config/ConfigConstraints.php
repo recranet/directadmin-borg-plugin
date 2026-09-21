@@ -31,7 +31,7 @@ final class ConfigConstraints
                 new Assert\Regex(
                     pattern: '/::/',
                     match: false,
-                    message: 'Repository must not include an archive name (the "::archive" part).',
+                    message: 'Repository must not include a backup name (the "::archive" part).',
                 ),
                 new Assert\Regex(
                     // Absolute path, ssh:// URL, or scp-style user@host:path.
@@ -66,7 +66,7 @@ final class ConfigConstraints
                 new Assert\Regex(
                     pattern: '/[\r\n\0]/',
                     match: false,
-                    message: 'Archive date format must be a single line.',
+                    message: 'Backup date format must be a single line.',
                 ),
             ],
             'index_files'          => [new Assert\Type('bool')],

@@ -31,7 +31,7 @@ final class AdminPage
     private const TABS = [
         'overview'   => 'Overview',
         'repository' => 'Repository',
-        'archives'   => 'Archives',
+        'archives'   => 'Backups',
         'jobs'       => 'Jobs',
     ];
 
@@ -273,7 +273,7 @@ final class AdminPage
 
         $archive = $this->request->body()->getString('archive');
         if ($archive === '') {
-            $this->flash->error('No archive selected.');
+            $this->flash->error('No backup selected.');
 
             return;
         }
@@ -291,7 +291,7 @@ final class AdminPage
         );
         $this->plugin->dispatcher()->dispatch($job);
 
-        $this->flash->success('Indexing started. Progress is shown below; this only has to happen once per archive.');
+        $this->flash->success('Indexing started. Progress is shown below; this only has to happen once per backup.');
     }
 
     private function breakLock(): void
@@ -377,7 +377,7 @@ final class AdminPage
         $username = trim($this->request->body()->getString('username'));
 
         if ($archive === '' || $username === '') {
-            $this->flash->error('Choose an archive and an account.');
+            $this->flash->error('Choose a backup and an account.');
 
             return;
         }
@@ -474,7 +474,7 @@ final class AdminPage
         $username = trim($this->request->body()->getString('username'));
 
         if ($archive === '' || $username === '') {
-            $this->flash->error('Choose an archive and an account.');
+            $this->flash->error('Choose a backup and an account.');
 
             return;
         }
@@ -497,7 +497,7 @@ final class AdminPage
 
         if ($adminBackup === null) {
             $this->flash->error(\sprintf(
-                'No DirectAdmin backup for "%s" was found in %s in this archive, and the databases are only in that. '
+                'No DirectAdmin backup for "%s" was found in this backup under %s, and the databases are only in that. '
                 . 'A home directory holds none of them.',
                 $username,
                 $config->adminBackupsDir()
@@ -552,7 +552,7 @@ final class AdminPage
         $destination = $this->restoreDestination();
 
         if ($archive === '' || $username === '') {
-            $this->flash->error('Choose an archive and a username.');
+            $this->flash->error('Choose a backup and a username.');
 
             return;
         }
@@ -582,7 +582,7 @@ final class AdminPage
 
         if ($config->restoreAdminBackup() && $adminBackup === null) {
             $this->flash->warning(\sprintf(
-                'No DirectAdmin backup for "%s" was found in %s in this archive, so only the home directory '
+                'No DirectAdmin backup for "%s" was found in this backup under %s, so only the home directory '
                 . 'is being restored. Databases and account configuration live in that backup, not in the home directory.',
                 $username,
                 $config->adminBackupsDir()
@@ -635,7 +635,7 @@ final class AdminPage
                 $username,
                 $contents,
                 $cleanPaths !== []
-                    ? ' ' . implode(' and ', $cleanPaths) . ' will be deleted first, so nothing outside the archive survives.'
+                    ? ' ' . implode(' and ', $cleanPaths) . ' will be deleted first, so nothing outside the backup survives.'
                     : ' Existing files are overwritten; files added since the backup are left alone.'
             )
             : \sprintf('Restoring %s (%s) into %s. Follow it under Jobs.', $username, $contents, $destination));
@@ -661,7 +661,7 @@ final class AdminPage
         $destination = $this->restoreDestination();
 
         if ($archive === '' || !Account::isValidName($username)) {
-            $this->flash->error('Choose an archive and a valid username.');
+            $this->flash->error('Choose a backup and a valid username.');
 
             return;
         }
@@ -670,7 +670,7 @@ final class AdminPage
 
         if ($adminBackup === null) {
             $this->flash->error(\sprintf(
-                'No DirectAdmin backup for "%s" was found in %s in this archive. Looked for %s.',
+                'No DirectAdmin backup for "%s" was found in this backup under %s. Looked for %s.',
                 $username,
                 $config->adminBackupsDir(),
                 implode(', ', array_map(

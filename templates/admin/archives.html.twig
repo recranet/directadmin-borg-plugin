@@ -14,7 +14,7 @@
             </p>
 
             {% if accounts.accounts is empty %}
-                <p class="borg-empty">This archive has no <span class="borg-mono">/home</span> in it.</p>
+                <p class="borg-empty">This backup has no <span class="borg-mono">/home</span> in it.</p>
             {% else %}
                 <div class="borg-scroll">
                     <table class="borg-table">
@@ -45,7 +45,7 @@
             {% endif %}
 
             <div class="borg-actions">
-                <a class="borg-btn" href="{{ url({ tab: 'archives' }) }}">Back to archives</a>
+                <a class="borg-btn" href="{{ url({ tab: 'archives' }) }}">Back to backups</a>
             </div>
         </div>
     {% endif %}
@@ -56,19 +56,19 @@
 
     {% if browser and browser.needs_index %}
         <div class="borg-card">
-            <h2>Index this archive first</h2>
+            <h2>Index this backup first</h2>
 
             <p class="borg-mono" style="margin-top:0">{{ browser.archive }}</p>
 
             <p>
-                borg cannot list a single directory: it reads the whole archive however
+                borg cannot list a single directory: it reads the whole backup however
                 little you ask for. On a hosting server that is millions of entries, so
                 browsing straight through borg would cost a full scan on every click.
             </p>
             <p>
-                Indexing reads the archive once, in the background, and writes what it
-                finds to disk. After that every directory in this archive opens
-                immediately. It only has to happen once &mdash; archives never change.
+                Indexing reads the backup once, in the background, and writes what it
+                finds to disk. After that every directory in this backup opens
+                immediately. It only has to happen once &mdash; backups never change.
             </p>
 
             {% if not browser.index_job %}
@@ -92,7 +92,7 @@
                     </div>
 
                     <div class="borg-actions">
-                        <button class="borg-btn borg-btn-primary" type="submit">Index this archive</button>
+                        <button class="borg-btn borg-btn-primary" type="submit">Index this backup</button>
                         <a class="borg-btn" href="{{ url({ tab: 'archives', archive: browser.archive, user: browser.username }) }}">Back to {{ browser.username }}</a>
                     </div>
                 </form>
@@ -117,8 +117,8 @@
         {% include 'partial/breadcrumbs.html.twig' with { crumbs: browser.crumbs } %}
 
         {% if browser.error %}
-            <div class="borg-alert borg-alert-err">Could not read the archive: {{ browser.error }}</div>
-            <a class="borg-btn" href="{{ url({ tab: 'archives' }) }}">Back to archives</a>
+            <div class="borg-alert borg-alert-err">Could not read the backup: {{ browser.error }}</div>
+            <a class="borg-btn" href="{{ url({ tab: 'archives' }) }}">Back to backups</a>
         {% else %}
             {% if browser.truncated %}
                 <div class="borg-alert borg-alert-warn">
@@ -130,7 +130,7 @@
                 {# Saying so matters: an empty-looking folder here is not an
                    empty folder in the archive, and restoring it still works. #}
                 <div class="borg-alert borg-alert-warn">
-                    This archive is indexed by directory only, so individual files are not
+                    This backup is indexed by directory only, so individual files are not
                     listed. Selecting a directory still restores everything inside it.
                     <form method="post" action="{{ url({ tab: 'archives', archive: browser.archive, path: browser.path }) }}"
                           style="display:inline">
@@ -146,9 +146,9 @@
             {% if browser.entries is empty %}
                 <p class="borg-empty">
                     {% if browser.has_files %}
-                        This directory is empty in the archive.
+                        This directory is empty in the backup.
                     {% else %}
-                        No subdirectories here. This archive is indexed by directory only, so any
+                        No subdirectories here. This backup is indexed by directory only, so any
                         files in this directory are not shown &mdash; restore the directory above
                         to get them.
                     {% endif %}
@@ -205,17 +205,17 @@
     </div>
     {% endif %}
 {% elseif error %}
-    <div class="borg-alert borg-alert-err">Could not list archives: {{ error }}</div>
+    <div class="borg-alert borg-alert-err">Could not list backups: {{ error }}</div>
 {% elseif archives is empty %}
     <div class="borg-card">
         <p class="borg-empty">
-            This repository has no archives yet. They are created by whatever backs this server
+            This repository has no backups yet. They are created by whatever backs this server
             up, not by this plugin.
         </p>
     </div>
 {% else %}
     <div class="borg-card">
-        <h2>Archives ({{ archives|length }})</h2>
+        <h2>Backups ({{ archives|length }})</h2>
 
         <div class="borg-scroll">
             <table class="borg-table">

@@ -240,7 +240,7 @@ final class ArchiveIndex
     {
         $file = $this->file($archive);
         if (!is_file($file)) {
-            return new DirectoryListing([], false, false, 'This archive has not been indexed yet.');
+            return new DirectoryListing([], false, false, 'This backup has not been indexed yet.');
         }
 
         $directory = rtrim(PathGuard::normalize($path), '/');
@@ -462,7 +462,7 @@ final class ArchiveIndex
         if (!$process->isSuccessful()) {
             $this->filesystem->remove($target);
 
-            throw new \RuntimeException('Could not sort the archive index: ' . trim($process->getErrorOutput()));
+            throw new \RuntimeException('Could not sort the backup index: ' . trim($process->getErrorOutput()));
         }
     }
 }

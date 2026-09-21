@@ -110,7 +110,7 @@ final class JobRunner
     {
         $archive = (string) ($job->params()['archive'] ?? '');
         if ($archive === '') {
-            return $this->finish($job, Job::STATUS_FAILED, 2, 'Index job is missing an archive name.');
+            return $this->finish($job, Job::STATUS_FAILED, 2, 'Index job is missing a backup name.');
         }
 
         // Its own lock, not the repository one: indexing only reads, so it must
@@ -118,13 +118,13 @@ final class JobRunner
         // archive, which would have two processes writing one file.
         $lock = $this->plugin->lockFactory()->createLock('borg-index-' . sha1($archive), 86400.0, false);
         if (!$lock->acquire()) {
-            return $this->finish($job, Job::STATUS_FAILED, 75, 'This archive is already being indexed.');
+            return $this->finish($job, Job::STATUS_FAILED, 75, 'This backup is already being indexed.');
         }
 
         $includeFiles = (bool) ($job->params()['files'] ?? false);
 
         $this->log($job, \sprintf(
-            'Indexing %s (%s). This reads every entry in the archive once.',
+            'Indexing %s (%s). This reads every entry in the backup once.',
             $archive,
             $includeFiles ? 'directories and files' : 'directory tree only'
         ));
@@ -150,12 +150,12 @@ final class JobRunner
                 $job,
                 Job::STATUS_FAILED,
                 $built['result']->exitCode,
-                'Could not read the archive: ' . $built['result']->errorMessage()
+                'Could not read the backup: ' . $built['result']->errorMessage()
             );
         }
 
         return $this->finish($job, Job::STATUS_SUCCESS, 0, \sprintf(
-            'Indexed %s %s. Browsing this archive is now immediate.',
+            'Indexed %s %s. Browsing this backup is now immediate.',
             number_format($built['entries']),
             $includeFiles ? 'entries' : 'directories and links'
         ));
@@ -171,7 +171,7 @@ final class JobRunner
         $owner = (string) ($params['chown_to'] ?? '');
 
         if ($archive === '' || $paths === [] || $destination === '') {
-            return $this->finish($job, Job::STATUS_FAILED, 2, 'Restore job is missing an archive, paths or destination.');
+            return $this->finish($job, Job::STATUS_FAILED, 2, 'Restore job is missing a backup, paths or destination.');
         }
 
         $inPlace = (bool) ($params['in_place'] ?? false);

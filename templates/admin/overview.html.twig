@@ -23,12 +23,12 @@
             <dl class="borg-stat"><dt>borg version</dt><dd>{{ borg.version ?: 'not installed' }}</dd></dl>
 
             {% if detected.archive_count is not null %}
-                <dl class="borg-stat"><dt>Archives</dt><dd>{{ detected.archive_count }}</dd></dl>
+                <dl class="borg-stat"><dt>Backups</dt><dd>{{ detected.archive_count }}</dd></dl>
             {% endif %}
             {% if detected.last_archive %}
                 {# The newest archive, not a job of ours: the runs that produce
                    them belong to the server's own backup script. #}
-                <dl class="borg-stat"><dt>Newest archive</dt><dd>{{ detected.last_archive|age }}</dd></dl>
+                <dl class="borg-stat"><dt>Newest backup</dt><dd>{{ detected.last_archive|age }}</dd></dl>
             {% endif %}
             {% if detected.unique_size is not null %}
                 <dl class="borg-stat"><dt>Deduplicated</dt><dd>{{ detected.unique_size|bytes }}</dd></dl>
@@ -48,18 +48,18 @@
     <div class="borg-card">
         <h2>Restore</h2>
         <p>
-            Open <a href="{{ url({ tab: 'archives' }) }}">Archives</a> to browse an archive and
+            Open <a href="{{ url({ tab: 'archives' }) }}">Backups</a> to browse a backup and
             restore files, or to restore a whole account.
         </p>
         <div class="borg-actions">
-            <a class="borg-btn borg-btn-primary" href="{{ url({ tab: 'archives' }) }}">Browse archives</a>
+            <a class="borg-btn borg-btn-primary" href="{{ url({ tab: 'archives' }) }}">Browse backups</a>
         </div>
     </div>
 
     <div class="borg-card">
         <h2>Maintenance</h2>
         <p class="borg-note" style="margin-top:0">
-            This plugin does not create archives, prune them or run on a schedule &mdash; whatever
+            This plugin does not create backups, prune them or run on a schedule &mdash; whatever
             already backs this server up owns all of that. These two are the exceptions, because
             both are about being able to read the repository at all.
         </p>

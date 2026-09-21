@@ -17,7 +17,7 @@
 
     {% if user_panel.index_stale %}
         <div class="borg-alert borg-alert-warn">
-            This archive was indexed before the current restore settings were saved, so what it
+            This backup was indexed before the current restore settings were saved, so what it
             knows about DirectAdmin backups may be out of date. Refresh it to be sure.
             <form method="post" action="{{ url({ tab: 'archives', archive: user_panel.archive, user: user_panel.username }) }}"
                   style="display:inline">
@@ -44,7 +44,7 @@
 
     {% if not user_panel.has_domains %}
         <p class="borg-empty">
-            <span class="borg-mono">{{ user_panel.domains_path }}</span> is not in this archive.
+            <span class="borg-mono">{{ user_panel.domains_path }}</span> is not in this backup.
         </p>
     {% else %}
         <p class="borg-note" style="margin-top:0">
@@ -65,7 +65,7 @@
                 </label>
                 <span class="borg-hint">
                     A restore only adds and overwrites, so a webshell added since the backup
-                    survives one. Tick this for a compromised site, so nothing outside the archive
+                    survives one. Tick this for a compromised site, so nothing outside the backup
                     is left behind. It deletes the whole <span class="borg-mono">domains</span>
                     directory &mdash; if <span class="borg-mono">public_html</span> is a symlink
                     into a repository beside it, removing only that link would leave the real
@@ -92,7 +92,7 @@
 
     {% if not user_panel.has_email %}
         <p class="borg-empty">
-            <span class="borg-mono">{{ user_panel.email_path }}</span> is not in this archive.
+            <span class="borg-mono">{{ user_panel.email_path }}</span> is not in this backup.
         </p>
     {% else %}
         <p class="borg-note" style="margin-top:0">
@@ -126,8 +126,8 @@
         </p>
     {% elseif not user_panel.admin_backup %}
         <p class="borg-empty">
-            No DirectAdmin backup for this account is in this archive, and the databases are
-            only in that. A home directory holds none of them.
+            This backup contains no DirectAdmin backup for this account, and the databases
+            are only in that. A home directory holds none of them.
         </p>
     {% else %}
         <p class="borg-note" style="margin-top:0">
@@ -185,12 +185,12 @@
 
     {% if user_panel.admin_backup %}
         <p class="borg-note">
-            Found in this archive: <span class="borg-mono">{{ user_panel.admin_backup }}</span>
+            Found in this backup: <span class="borg-mono">{{ user_panel.admin_backup }}</span>
         </p>
     {% else %}
         <div class="borg-alert borg-alert-warn">
-            No DirectAdmin backup for this account is in this archive, so only the home directory
-            can be restored. Databases and account configuration are not in a home directory.
+            This backup contains no DirectAdmin backup for this account, so only the home
+            directory can be restored. Databases and account configuration are not in a home directory.
         </div>
     {% endif %}
 

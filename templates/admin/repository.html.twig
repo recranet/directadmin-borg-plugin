@@ -52,7 +52,7 @@
 
         {% if detected.reachable %}
             <div class="borg-alert borg-alert-ok">
-                Repository found: {{ detected.archive_count }} archive(s), encryption
+                Repository found: {{ detected.archive_count }} backup(s), encryption
                 {{ detected.encryption ?: 'unknown' }}{% if detected.short_id %}, id
                 <code>{{ detected.short_id }}…</code>{% endif %}.
             </div>
@@ -71,7 +71,7 @@
             <input type="text" id="borg-admin-backups" name="admin_backups_dir" value="{{ config.admin_backups_dir }}">
             <span class="borg-hint">
                 Where DirectAdmin writes its own per-user backups, as they appear
-                <em>inside the archive</em>. Restoring a whole account needs these: they hold the
+                <em>inside the backup</em>. Restoring a whole account needs these: they hold the
                 databases and the account configuration, which a home directory does not.
             </span>
         </div>

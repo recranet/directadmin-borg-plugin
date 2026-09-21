@@ -65,13 +65,13 @@ final class StatusCommand extends Command
             $listing = $this->plugin->repository()->listArchives();
 
             if ($listing['result']->isSuccessful()) {
-                $io->section(\sprintf('Archives (%d)', \count($listing['archives'])));
+                $io->section(\sprintf('Backups (%d)', \count($listing['archives'])));
                 $rows = [];
                 foreach (\array_slice($listing['archives'], 0, 10) as $archive) {
                     $rows[] = [$archive->name, Format::dateTime($archive->time), Format::age($archive->time)];
                 }
                 if ($rows !== []) {
-                    $io->table(['Archive', 'Created', 'Age'], $rows);
+                    $io->table(['Backup', 'Created', 'Age'], $rows);
                 }
             } else {
                 $io->error('Repository unreadable: ' . $listing['result']->errorMessage());
