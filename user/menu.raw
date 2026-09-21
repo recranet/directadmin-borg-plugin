@@ -17,7 +17,7 @@ try {
             'name'    => 'Backups',
             'icon'    => '/CMD_PLUGINS/borg/images/user_icon.svg',
             'entries' => [[
-                'name'    => 'Restore Files',
+                'name'    => 'Borg Backup',
                 'icon'    => '/CMD_PLUGINS/borg/images/user_icon.svg',
                 'href'    => '/CMD_PLUGINS/borg/index.html',
                 'newTab'  => false,

@@ -1,0 +1,48 @@
+{# A backup that has not been indexed yet, User Level.
+
+   The same card Admin Level shows, in the customer's words. It exists because
+   borg cannot list one directory -- it reads the whole backup whatever you ask
+   for -- so this page reads the index instead, and the index has to be built
+   once per backup. Before this card, the page asked borg directly and simply
+   never finished loading. #}
+<div class="borg-card">
+    <h2>
+        {% include 'partial/calendar_icon.html.twig' %}
+        {{ prepare.taken_at ? prepare.taken_at|date_only : 'This backup' }}
+    </h2>
+
+    <p class="borg-note" style="margin-top:0">
+        This backup has to be prepared before you can look inside it. That is a one-off:
+        once it is done, this date opens immediately from now on.
+    </p>
+
+    {% if not prepare.index_job %}
+        <p>
+            Preparing takes a few minutes on a large backup. You can leave this page and
+            come back &mdash; it carries on in the background.
+        </p>
+
+        <form method="post" action="{{ url({ archive: prepare.archive }) }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="action" value="build_index">
+            <input type="hidden" name="archive" value="{{ prepare.archive }}">
+
+            <div class="borg-actions">
+                <button class="borg-btn borg-btn-primary" type="submit">Prepare this backup</button>
+                <a class="borg-btn" href="{{ url({}) }}">Back to backups</a>
+            </div>
+        </form>
+    {% endif %}
+</div>
+
+{% if prepare.index_job %}
+    {# Live progress: the page reloads itself when the scan finishes. #}
+    {% include 'partial/job_detail.html.twig' with {
+        job: prepare.index_job,
+        log: prepare.index_log,
+        status_url: prepare.index_status_url,
+        heading: 'Preparing this backup',
+        show_type: false,
+        back_url: url({})
+    } only %}
+{% endif %}

@@ -8,6 +8,8 @@ use Recranet\DirectAdminBorg\Borg\Archive;
 use Recranet\DirectAdminBorg\Borg\ArchiveEntry;
 use Recranet\DirectAdminBorg\Borg\ArchiveName;
 use Recranet\DirectAdminBorg\Borg\DirectoryListing;
+use Recranet\DirectAdminBorg\Borg\Repository;
+use Recranet\DirectAdminBorg\Config\Configuration;
 use Recranet\DirectAdminBorg\Exception\BorgPluginException;
 use Recranet\DirectAdminBorg\Http\PluginRequest;
 use Recranet\DirectAdminBorg\Job\AccountTreeRestore;
@@ -64,7 +66,7 @@ final class UserPage
         $renderer->setUrlGenerator(fn (array $params = []): string => $this->request->url($params));
 
         $base = [
-            'title'       => 'Backups',
+            'title'       => 'Borg Backup',
             'subtitle'    => 'Restore files from the server backup into your home directory.',
             'messages'    => [],
             'enabled'     => $config->userRestoreEnabled(),
@@ -99,11 +101,17 @@ final class UserPage
         }
 
         $context = array_merge($base, [
-            'available'   => true,
-            'messages'    => $this->flash->all(),
-            'csrf_token'  => $this->csrf->token($this->request->level, $this->request->username),
-            'home'        => $account->home,
-            'recent_jobs' => array_map([$this, 'jobToArray'], $this->plugin->jobs()->recent(10, $account->username)),
+            'available'  => true,
+            'messages'   => $this->flash->all(),
+            'csrf_token' => $this->csrf->token($this->request->level, $this->request->username),
+            'home'       => $account->home,
+            // Restores only: a customer who prepares a backup gets the
+            // progress card for it on the spot, and "Your recent restores"
+            // stays a list of things that changed their files.
+            'recent_jobs' => array_map(
+                [$this, 'jobToArray'],
+                $this->plugin->jobs()->recent(10, $account->username, Job::TYPE_RESTORE)
+            ),
         ]);
 
         $jobId = $this->request->param('job');
@@ -117,7 +125,7 @@ final class UserPage
         } elseif ($archive !== '' && $this->request->param('path') !== '') {
             $context = array_merge($context, ['browser' => $this->browserContext($archive, $account)]);
         } elseif ($archive !== '') {
-            $context = array_merge($context, ['panel' => $this->panelContext($archive, $account)]);
+            $context = array_merge($context, ['panel' => $this->panelContext($archive, $account, $config)]);
         } else {
             $context = array_merge($context, $this->archiveListContext());
         }
@@ -142,10 +150,12 @@ final class UserPage
 
         try {
             match ($this->request->action()) {
-                'restore'         => $this->restore(),
-                'restore_domains' => $this->restoreTree('domains'),
-                'restore_email'   => $this->restoreTree('imap'),
-                default           => $this->flash->error('Unknown action.'),
+                'restore'           => $this->restore(),
+                'restore_domains'   => $this->restoreTree('domains'),
+                'restore_email'     => $this->restoreTree('imap'),
+                'restore_databases' => $this->restoreDatabases(),
+                'build_index'       => $this->buildIndex(),
+                default             => $this->flash->error('Unknown action.'),
             };
         } catch (\Throwable $e) {
             $this->flash->error($e->getMessage());
@@ -156,17 +166,19 @@ final class UserPage
      * Put the website or the mail back, in one click.
      *
      * The same operation Admin Level offers, for the account making the
-     * request. Two things it deliberately does not inherit from that screen:
+     * request, and now with the same two confirmations.
      *
-     * The pre-clean is not offered. Deleting the directory before extracting is
-     * the malware-cleanup path -- irreversible, and it takes everything the
-     * archive does not contain with it. That is a decision for whoever is
-     * handling the incident, not a checkbox on a customer's page.
+     * The tick is the ordinary one: this writes over live files and there is no
+     * undo, so it is the moment the customer says the current files can go.
      *
-     * And it asks for a tick. An administrator restoring in place has made a
-     * considered decision and typed a username to get there; a customer has
-     * clicked one large button and may not have read the warning beside it.
-     * The tick is the moment they say the current files can go.
+     * The pre-clean is the other thing entirely, and the reason it asks for the
+     * username in writing. A restore overwrites: a file in the backup replaces
+     * the one that is there, and a file that is not in the backup is left
+     * alone -- which is why a webshell dropped in last week survives one.
+     * Deleting first is what makes the directory exactly what the backup held,
+     * and it takes everything added since with it: new sites, uploads, anything
+     * a customer put there this month. Same tick-and-type as Admin Level,
+     * because the mistake it prevents is the same mistake.
      */
     private function restoreTree(string $tree): void
     {
@@ -186,8 +198,36 @@ final class UserPage
             throw new BorgPluginException(\sprintf('Tick the box to confirm that what is in %s now should be replaced with the backup.', $target));
         }
 
+        // Confined and re-checked inside queue(), which is the one place that
+        // decides what path the job carries -- the same guard the admin
+        // pre-clean goes through, rather than a second copy of it here.
+        $cleanPaths = [];
+        if ($this->request->bodyBool('clean_first')) {
+            if ($this->request->body()->getString('clean_confirm') !== $account->username) {
+                throw new BorgPluginException(\sprintf('Type "%s" to confirm deleting everything in %s before restoring it.', $account->username, $target));
+            }
+
+            $cleanPaths[] = $target;
+        }
+
         $job = (new AccountTreeRestore($this->plugin))
-            ->queue($archive, $account, $tree, $account->username, 'user');
+            ->queue($archive, $account, $tree, $account->username, 'user', $cleanPaths);
+
+        if ($cleanPaths !== []) {
+            // Not the overlay wording with a clause bolted on: "anything added
+            // since is left alone" is the opposite of what was just asked for,
+            // and that sentence is the one thing the customer has to have read
+            // correctly.
+            $this->flash->success(\sprintf(
+                'Emptying %s and putting the backup back in its place, so what is left is exactly '
+                . 'what that backup held -- anything added since is gone. '
+                . 'Follow it under "Your recent restores" (%s).',
+                $target,
+                $job->id
+            ));
+
+            return;
+        }
 
         $this->flash->success($tree === 'imap'
             ? \sprintf(
@@ -204,6 +244,107 @@ final class UserPage
                 $target,
                 $job->id
             ));
+    }
+
+    /**
+     * Put the account's DirectAdmin backup where DirectAdmin's own restore
+     * screen can see it, so the customer can import their databases.
+     *
+     * The same restore Admin Level offers, ending in the same place. It is if
+     * anything more at home here: the screen that imports the dump is a User
+     * Level screen, so the person who has to drive it is already logged in
+     * where the file lands.
+     *
+     * Only ever this account's own tarball. DirectAdmin hands whatever is in
+     * /home/<user>/backups to the restoring user, so the dot-anchored match in
+     * Repository::pickAdminBackup() is what stops `jean` being offered
+     * `user.admin.beaujean.tar.zst` -- and the account is the logged-in one
+     * rather than anything the request carries.
+     */
+    private function restoreDatabases(): void
+    {
+        $account = $this->account;
+        if ($account === null) {
+            throw new BorgPluginException('Account could not be resolved.');
+        }
+
+        $config = $this->plugin->config()->load();
+        if (!$config->restoreAdminBackup()) {
+            throw new BorgPluginException('Database restores are switched off on this server. Ask your hosting provider.');
+        }
+
+        $archive = $this->request->body()->getString('archive');
+        if ($archive === '' || !isset($this->archiveTimes()[$archive])) {
+            throw new BorgPluginException('Unknown backup.');
+        }
+
+        $adminBackup = $this->findAdminBackup($archive, $config, $account);
+        if ($adminBackup === null) {
+            throw new BorgPluginException('There is no DirectAdmin backup of your account in this backup, and your databases are only in that.');
+        }
+
+        // DirectAdmin's own name for this directory, derived from the resolved
+        // account rather than the request. The worker resolves it again from
+        // /etc/passwd and re-checks it before writing, because it runs as root
+        // into a directory the customer owns.
+        $backupsDir = $account->confine($account->home . '/backups');
+
+        $job = $this->plugin->jobs()->create(Job::TYPE_RESTORE, $account->username, [
+            'archive'      => $archive,
+            'paths'        => [$adminBackup->path],
+            'destination'  => $backupsDir,
+            'restore_user' => $account->username,
+            'deliver_to'   => $backupsDir,
+            'trigger'      => 'user',
+        ]);
+        $this->plugin->dispatcher()->dispatch($job);
+
+        $this->flash->success(\sprintf(
+            'Putting %s into %s. When it finishes, go to Create/Restore Backups -> Restore Backups, '
+            . 'pick that file, tick Databases and restore. Nothing changes until you do. '
+            . 'The file counts against your disk space until you delete it. '
+            . 'Follow it under "Your recent restores" (%s).',
+            basename($adminBackup->path),
+            $backupsDir,
+            $job->id
+        ));
+    }
+
+    /**
+     * Queue the one-off scan that makes a backup browsable.
+     *
+     * The same job Admin Level queues, for the same reason: borg cannot list a
+     * single directory, so every screen here would otherwise cost a full pass
+     * over the backup -- minutes on a hosting server, per click, while the
+     * customer stares at a page that never arrives.
+     *
+     * One at a time, across the whole server. An administrator indexing five
+     * backups at once has decided to; sixty customers each queueing their own
+     * would be a scan per customer over the same repository, which is the one
+     * way this page could hurt the server it restores from.
+     */
+    private function buildIndex(): void
+    {
+        $archive = $this->request->body()->getString('archive');
+        if ($archive === '' || !isset($this->archiveTimes()[$archive])) {
+            throw new BorgPluginException('Unknown backup.');
+        }
+
+        $running = $this->runningIndexJob();
+        if ($running !== null) {
+            throw new BorgPluginException(($running->params()['archive'] ?? '') === $archive ? 'This backup is already being prepared. It will be ready shortly.' : 'Another backup is being prepared right now. Try again when it has finished.');
+        }
+
+        $job = $this->plugin->jobs()->create(Job::TYPE_INDEX, $this->request->username, [
+            'archive' => $archive,
+            // The administrator's setting decides this, not the customer: it
+            // trades index size against being able to pick out single files,
+            // and it is the server's disk either way.
+            'files' => $this->plugin->config()->load()->indexFiles(),
+        ]);
+        $this->plugin->dispatcher()->dispatch($job);
+
+        $this->flash->success('Preparing this backup. It only has to happen once; the page follows along below.');
     }
 
     private function restore(): void
@@ -294,6 +435,10 @@ final class UserPage
                 'taken_at'    => '', 'restore_dir' => ''];
         }
 
+        if (!$this->plugin->archiveIndex()->exists($archive)) {
+            return $this->indexContext($archive) + ['restore_dir' => $account->home, 'path' => $account->home];
+        }
+
         $requested = $this->request->param('path', $account->home);
 
         try {
@@ -328,12 +473,16 @@ final class UserPage
      *
      * @return array<string,mixed>
      */
-    private function panelContext(string $archive, Account $account): array
+    private function panelContext(string $archive, Account $account, Configuration $config): array
     {
         if (!isset($this->archiveTimes()[$archive])) {
             $this->flash->error('Unknown backup.');
 
             return ['archive' => $archive, 'missing' => true, 'taken_at' => '', 'home' => $account->home];
+        }
+
+        if (!$this->plugin->archiveIndex()->exists($archive)) {
+            return $this->indexContext($archive) + ['home' => $account->home];
         }
 
         $present = [];
@@ -343,34 +492,117 @@ final class UserPage
             }
         }
 
+        $adminBackup = $config->restoreAdminBackup()
+            ? $this->findAdminBackup($archive, $config, $account)
+            : null;
+
         return [
             'archive'      => $archive,
             'missing'      => false,
+            'needs_index'  => false,
             'taken_at'     => $this->archiveTimes()[$archive],
             'home'         => $account->home,
             'has_domains'  => isset($present['domains']),
             'has_email'    => isset($present['imap']),
             'domains_path' => AccountTreeRestore::path($account, 'domains'),
             'email_path'   => AccountTreeRestore::path($account, 'imap'),
+            // The databases are the one thing the home directory does not hold,
+            // so this panel says so whether or not the tarball is there.
+            'databases_on'      => $config->restoreAdminBackup(),
+            'admin_backup_name' => $adminBackup === null ? null : basename($adminBackup->path),
+            'admin_backup_size' => $adminBackup?->size,
+            'backups_dir'       => $account->home . '/backups',
         ];
+    }
+
+    /**
+     * The "not ready yet" screen, and the job that makes it ready.
+     *
+     * Admin Level has had this since indexing existed; User Level used to ask
+     * borg directly instead, which is a full pass over the backup for one
+     * directory listing and left the customer on a page that never finished
+     * loading. The flow is now the admin one exactly: a job, a log, and a page
+     * that reloads itself when the scan is done.
+     *
+     * @return array<string,mixed>
+     */
+    private function indexContext(string $archive): array
+    {
+        $running = $this->runningIndexJob($archive);
+
+        return [
+            'archive'          => $archive,
+            'missing'          => false,
+            'needs_index'      => true,
+            'taken_at'         => $this->archiveTimes()[$archive] ?? '',
+            'index_job'        => $running === null ? null : $this->jobToArray($running),
+            'index_log'        => $running === null ? '' : $this->plugin->jobs()->tail($running, 200),
+            'index_status_url' => $running === null
+                ? ''
+                : $this->request->baseUrl() . '/status.raw?job=' . rawurlencode($running->id),
+            'entries'   => [],
+            'crumbs'    => [],
+            'truncated' => false,
+        ];
+    }
+
+    /**
+     * An index job still running, for this backup or for any other.
+     *
+     * "Any other" is the point when nothing is passed: the customer-facing
+     * button allows one scan at a time across the server, so the question it
+     * has to answer is whether the repository is busy, not whether this
+     * particular backup is.
+     */
+    private function runningIndexJob(string $archive = ''): ?Job
+    {
+        foreach ($this->plugin->jobs()->recent(20, null, Job::TYPE_INDEX) as $job) {
+            if ($job->isFinished()) {
+                continue;
+            }
+            if ($archive === '' || ($job->params()['archive'] ?? null) === $archive) {
+                return $job;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * This account's DirectAdmin backup inside the archive, or nothing.
+     *
+     * Through the index, which records that directory's files even when the
+     * index is otherwise directories-only, precisely so this stays cheap. There
+     * is no borg fallback here on purpose: asking borg costs a full scan, and
+     * the whole point of the screen this feeds is that a customer never waits
+     * for one.
+     */
+    private function findAdminBackup(string $archive, Configuration $config, Account $account): ?ArchiveEntry
+    {
+        $index = $this->plugin->archiveIndex();
+
+        if (!$index->exists($archive)) {
+            return null;
+        }
+
+        return Repository::pickAdminBackup(
+            $index->listDirectory($archive, $config->adminBackupsDir())->entries,
+            $account->username
+        );
     }
 
     /**
      * One directory out of an archive, for a path already confined to the home.
      *
-     * Through the index when an administrator has built one -- instant, and the
-     * same view the admin gets. Without it, ask borg for that one subtree:
-     * slower, but a customer should not have to wait for an administrator to
-     * index an archive before they can restore from it. The path is confined
-     * before it gets here, so the scan is bounded either way.
+     * Index only, and the callers guarantee there is one. Falling back to borg
+     * is what this page used to do, and it is why it hung: borg reads the whole
+     * archive however little you ask for, so one customer opening one folder
+     * cost a full scan -- with nothing on screen to say why, no way to follow
+     * it, and another scan waiting on the next click.
      */
     private function listDirectory(string $archive, string $path): DirectoryListing
     {
-        $index = $this->plugin->archiveIndex();
-
-        return $index->exists($archive)
-            ? $index->listDirectory($archive, $path)
-            : $this->plugin->repository()->listDirectory($archive, $path);
+        return $this->plugin->archiveIndex()->listDirectory($archive, $path);
     }
 
     /** @return array<string,mixed> */

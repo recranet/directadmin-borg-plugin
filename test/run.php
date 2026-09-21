@@ -20,6 +20,7 @@ use Recranet\DirectAdminBorg\Borg\BorgRunner;
 use Recranet\DirectAdminBorg\Borg\Repository;
 use Recranet\DirectAdminBorg\Config\Configuration;
 use Recranet\DirectAdminBorg\Http\PluginRequest;
+use Recranet\DirectAdminBorg\Job\AccountTreeRestore;
 use Recranet\DirectAdminBorg\Job\Job;
 use Recranet\DirectAdminBorg\Job\JobRunner;
 use Recranet\DirectAdminBorg\Security\Account;
@@ -581,15 +582,73 @@ $t->contains($userPanel, '/home/alice/imap', 'and the same for mail');
 $t->contains($userPanel, 'Browse files', 'the file browser is still reachable underneath');
 $t->notContains($userPanel, 'name="destination"', 'there is no destination to choose');
 
-// The pre-clean is the malware-cleanup path: irreversible, and it takes
-// everything the archive does not contain with it. Admin-only, deliberately.
-$t->notContains($userPanel, 'name="clean_first"', 'a customer is not offered the pre-clean');
-$t->notContains($userPanel, 'name="clean_confirm"', 'nor the confirmation that goes with it');
+// The pre-clean is not a stronger version of the restore, it is a different
+// operation: a restore overwrites and leaves everything else where it is, so
+// the file an attacker added is exactly the file that survives one. The
+// customer whose site was hacked needs it, so it is on their page too -- behind
+// the same tick and typed name Admin Level asks for.
+$t->contains($userPanel, 'name="clean_first"', 'the customer is offered the pre-clean as well');
+$t->contains($userPanel, 'name="clean_confirm"', 'with the typed confirmation that goes with it');
+$t->contains($userPanel, 'Only for a hacked site', 'and the page says what it is for');
 $t->notContains($userPanel, 'name="username"', 'and cannot name an account: it is always their own');
 $t->notContains($userPanel, '/home/bob', 'no other account appears on the panel');
 
 // The list of dates opens the panel, not the browser.
 $t->contains($t->page('user', 'alice'), 'archive=' . rawurlencode($archive) . '"', 'the date list links to the panel, with no path');
+
+$t->group('A backup a customer opens before it has been indexed');
+
+// This page used to ask borg directly when there was no index, which is a full
+// pass over the backup for one directory listing: minutes of nothing on screen,
+// and another pass on the next click. It now does what Admin Level does -- a
+// job, a log, and a page that reloads itself when the scan finishes.
+$customerToken = static fn () => (new CsrfTokenizer($plugin->paths, $plugin->filesystem()))
+    ->token(PluginRequest::LEVEL_USER, 'alice');
+
+$plugin->archiveIndex()->purge('no-such-backup');
+$t->notOk($plugin->archiveIndex()->exists($archive), 'the index is gone again');
+
+$prepare = $t->page('user', 'alice', ['archive' => $archive]);
+$t->contains($prepare, 'Prepare this backup', 'the customer is offered the one-off scan');
+$t->notContains($prepare, 'Restore Domains', 'and nothing to restore until it is done');
+
+$prepare = $t->page('user', 'alice', ['archive' => $archive, 'path' => '/home/alice']);
+$t->contains($prepare, 'Prepare this backup', 'the file browser says the same rather than scanning');
+
+// One scan at a time across the server. An administrator indexing five backups
+// at once has decided to; sixty customers each queueing their own would be a
+// full pass over the repository per customer.
+$otherScan = $plugin->jobs()->create(Job::TYPE_INDEX, 'someone-else', ['archive' => 'another-backup']);
+$out = $t->page('user', 'alice', ['archive' => $archive], [
+    'action'     => 'build_index',
+    'archive'    => $archive,
+    'csrf_token' => $customerToken(),
+], 'POST');
+$t->contains($out, 'Another backup is being prepared', 'a second scan is refused while one is in flight');
+$t->is($plugin->jobs()->recent(1, null, Job::TYPE_INDEX)[0]->id, $otherScan->id, 'and nothing was queued');
+$plugin->jobs()->update($otherScan, ['status' => Job::STATUS_SUCCESS, 'finished_at' => date('c')]);
+
+$out = $t->page('user', 'alice', ['archive' => $archive], [
+    'action'     => 'build_index',
+    'archive'    => 'not-in-this-repository',
+    'csrf_token' => $customerToken(),
+], 'POST');
+$t->contains($out, 'Unknown backup', 'a backup name that is not in the repository is refused');
+
+$out = $t->page('user', 'alice', ['archive' => $archive], [
+    'action'     => 'build_index',
+    'archive'    => $archive,
+    'csrf_token' => $customerToken(),
+], 'POST');
+$t->contains($out, 'Preparing this backup', 'with nothing running, the customer can start it');
+
+$prepJob = $plugin->jobs()->recent(1, null, Job::TYPE_INDEX)[0];
+$t->is($prepJob->params()['archive'] ?? null, $archive, 'the job is for the backup they opened');
+$t->is($prepJob->params()['files'] ?? null, $plugin->config()->load()->indexFiles(), 'the administrator\'s setting decides what it records, not the customer');
+$t->ok($t->waitForJob($plugin, $prepJob->id, 300)?->status() === Job::STATUS_SUCCESS, 'the scan completes');
+$t->ok($plugin->archiveIndex()->exists($archive), 'and the index is back for the rest of the suite');
+
+$t->contains($t->page('user', 'alice', ['archive' => $archive]), 'Restore Domains', 'the panel opens normally once it is prepared');
 
 $t->group('A customer restoring a whole directory');
 
@@ -634,6 +693,41 @@ $t->is(
 );
 $t->ok(is_file('/home/alice/domains/added-by-the-customer.txt'), 'a file added since the backup survives: a restore is an overlay');
 $t->is((int) stat('/home/alice/domains')['uid'], $aliceUid, 'the restored tree still belongs to the account');
+
+// ...and the pre-clean is what makes it stop surviving.
+$t->ok(is_file('/home/alice/domains/added-by-the-customer.txt'), 'the file added since the backup is still there');
+
+$out = $restoreTree('restore_domains', ['confirm' => '1', 'clean_first' => '1', 'clean_confirm' => 'bob']);
+// Rendered through Twig, so the quotes around the name are escaped.
+$t->contains($out, 'Type &quot;alice&quot; to confirm', 'deleting first needs their own name, not another\'s');
+$t->ok(is_file('/home/alice/domains/added-by-the-customer.txt'), 'and nothing was deleted');
+
+$out = $restoreTree('restore_domains', ['confirm' => '1', 'clean_first' => '1', 'clean_confirm' => 'alice']);
+// The overlay wording would be actively wrong here -- "anything added since is
+// left alone" is the opposite of what was just asked for -- so the pre-clean
+// gets its own sentence rather than a clause bolted onto that one.
+$t->contains($out, 'anything added since is gone', 'the message says what the tick actually did');
+$t->contains($out, 'putting the backup back in its place', 'and it is the pre-clean wording, not the overlay one');
+
+$cleanJob = $plugin->jobs()->recent(1)[0];
+$t->is($cleanJob->params()['clean_paths'] ?? null, ['/home/alice/domains'], 'the job carries the directory to empty');
+$t->is($cleanJob->params()['confine_to'] ?? null, 'alice', 'bounded by their own home, re-checked in the worker');
+$t->ok($t->waitForJob($plugin, $cleanJob->id, 180)?->status() === Job::STATUS_SUCCESS, 'it completes');
+
+$t->notOk(is_file('/home/alice/domains/added-by-the-customer.txt'), 'the file added since the backup is gone');
+$t->is(
+    trim((string) @file_get_contents('/home/alice/domains/example.com/public_html/index.html')),
+    '<h1>alice site</h1>',
+    'and the directory holds exactly what the backup held'
+);
+$t->is((int) stat('/home/alice/domains')['uid'], $aliceUid, 'still owned by the account after being emptied');
+
+// The home directory itself is never the thing being emptied, whatever a hand
+// -built request asks for.
+$t->throws(
+    static fn () => (new AccountTreeRestore($plugin))->queue($archive, Account::resolve('alice', $plugin->paths), 'domains', 'alice', 'user', ['/home/alice']),
+    'a pre-clean of the whole home directory is refused'
+);
 
 $out = $restoreTree('restore_email', ['confirm' => '1']);
 $t->contains($out, 'Restoring your mailboxes', 'Email restores too');
@@ -797,7 +891,15 @@ $adminTree = static function (string $action, array $extra = []) use ($t, $archi
     ], $extra), 'POST');
 };
 
+// The same tick User Level asks for. The typed username only ever guarded the
+// deletion, so the ordinary restore -- the one that actually gets clicked --
+// went straight through on a click.
 $out = $adminTree('restore_domains');
+$t->contains($out, 'Tick the box to confirm', 'an admin restore in place is refused without the tick');
+$t->notContains($out, 'Restoring Domains for alice', 'and starts nothing');
+$t->contains($adminTree('restore_email'), 'Tick the box to confirm', 'Email asks for it too');
+
+$out = $adminTree('restore_domains', ['confirm' => '1']);
 $t->contains($out, 'Restoring Domains for alice', 'the admin button starts the restore');
 
 $adminTreeJob = $plugin->jobs()->recent(1)[0];
@@ -807,13 +909,13 @@ $t->is($adminTreeJob->params()['confine_to'] ?? null, 'alice', 'bounded by the a
 $t->is($adminTreeJob->params()['trigger'] ?? null, 'manual', 'and is recorded as an admin restore, not a customer one');
 $t->ok($t->waitForJob($plugin, $adminTreeJob->id, 180)?->status() === Job::STATUS_SUCCESS, 'it completes');
 
-$out = $adminTree('restore_email');
+$out = $adminTree('restore_email', ['confirm' => '1']);
 $t->contains($out, 'Restoring Email for alice', 'so does Email');
 $t->is($plugin->jobs()->recent(1)[0]->params()['paths'], ['/home/alice/imap'], 'it restores the imap directory');
 
 // The pre-clean stays here and nowhere else, and still needs the username back.
 $t->contains(
-    $adminTree('restore_domains', ['clean_first' => '1', 'clean_confirm' => 'wrong']),
+    $adminTree('restore_domains', ['confirm' => '1', 'clean_first' => '1', 'clean_confirm' => 'wrong']),
     'to confirm deleting',
     'the pre-clean still needs the username typed'
 );
@@ -851,7 +953,7 @@ $t->contains($status['stdout'], '"log"', 'an admin can poll any job');
 $t->group('Menu endpoints');
 
 $menu = $t->invoke('user', 'menu.raw', 'alice');
-$t->contains($menu['stdout'], 'Restore Files', 'the user menu entry is present when restores are enabled');
+$t->contains($menu['stdout'], 'Borg Backup', 'the user menu entry is present when restores are enabled');
 
 $plugin->config()->save(['user_restore_enabled' => false]);
 $menu = $t->invoke('user', 'menu.raw', 'alice');
@@ -1127,6 +1229,63 @@ $t->is(
 
 $plugin->filesystem()->remove('/home/alice/backups');
 
+$t->group('A customer restoring their own databases');
+
+// The one restore that does not finish the job, offered at the level where the
+// screen that does finish it actually lives: the customer is already logged in
+// where the tarball lands, so they are one page away from importing it.
+$userDatabases = static function () use ($t, $archive, $plugin) {
+    return $t->page('user', 'alice', ['archive' => $archive], [
+        'action'     => 'restore_databases',
+        'archive'    => $archive,
+        'csrf_token' => (new CsrfTokenizer($plugin->paths, $plugin->filesystem()))->token(PluginRequest::LEVEL_USER, 'alice'),
+    ], 'POST');
+};
+
+$panel = $t->page('user', 'alice', ['archive' => $archive]);
+$t->contains($panel, 'Restore Databases', 'the customer is offered it at all');
+$t->contains($panel, 'user.admin.alice.tar.zst', 'and told which file this puts there');
+$t->notContains($panel, 'beaujean', 'no other account\'s tarball is named on it');
+$t->notContains($panel, 'name="username"', 'and there is no account to name: it is always their own');
+
+// Their own, matched the same dot-anchored way the rest of the plugin matches
+// it, against the logged-in account rather than anything the request carries.
+$t->contains(
+    $t->page('user', 'bob', ['archive' => $archive]),
+    'bob.tar.gz',
+    'another customer is offered their own, in the plain naming form'
+);
+$t->notContains($t->page('user', 'bob', ['archive' => $archive]), 'user.admin.alice', 'and never alice\'s');
+
+$t->notOk(is_dir('/home/alice/backups'), 'the directory is not there to start with');
+
+$out = $userDatabases();
+$t->contains($out, '/home/alice/backups', 'the message names where the file goes');
+$t->contains($out, 'Restore Backups', 'and the DirectAdmin screen that imports it');
+
+$dbUserJob = $plugin->jobs()->recent(1)[0];
+$t->is($dbUserJob->owner(), 'alice', 'the job belongs to the customer, so they can follow it');
+$t->is($dbUserJob->params()['paths'], ['/home/admin/admin_backups/user.admin.alice.tar.zst'], 'only their own tarball is restored');
+$t->is($dbUserJob->params()['deliver_to'] ?? null, '/home/alice/backups', 'delivered into their own backups directory');
+$t->is($dbUserJob->params()['trigger'] ?? null, 'user', 'and is recorded as a customer restore');
+$t->ok(!isset($dbUserJob->params()['in_place']), 'it is not an in-place restore');
+$t->ok($t->waitForJob($plugin, $dbUserJob->id, 180)?->status() === Job::STATUS_SUCCESS, 'the delivery completes');
+
+$deliveredToUser = '/home/alice/backups/user.admin.alice.tar.zst';
+$t->ok(is_file($deliveredToUser), 'the tarball lands where DirectAdmin will offer it back');
+$t->is(trim((string) @file_get_contents($deliveredToUser)), 'alice config and databases', 'intact');
+$t->is((int) stat($deliveredToUser)['uid'], $aliceUid, 'owned by the customer, as DirectAdmin requires of a user-level restore');
+$t->is(substr(sprintf('%o', stat($deliveredToUser)['mode']), -4), '0600', 'and readable only by them');
+
+// Switched off by the administrator means gone, not just hidden.
+$plugin->config()->save(['restore_admin_backup' => false]);
+$panel = $t->page('user', 'alice', ['archive' => $archive]);
+$t->notContains($panel, 'Restore Databases', 'the card disappears when DirectAdmin backups are off');
+$t->contains($userDatabases(), 'switched off', 'and a posted action is refused, not just hidden');
+$plugin->config()->save(['restore_admin_backup' => true]);
+
+$plugin->filesystem()->remove('/home/alice/backups');
+
 $t->group('Restoring a home directory in place');
 
 $live = '/home/alice/domains/example.com/public_html/index.html';
@@ -1284,7 +1443,11 @@ $t->contains($out, 'Databases and account configuration', 'the warning says what
 
 $t->group('User level cannot reach admin backups');
 
-$t->notContains($t->page('user', 'alice', ['archive' => $archive, 'path' => '/home/admin/admin_backups']), 'user.admin.alice.tar.zst', 'a customer cannot browse the admin backups');
+// The directory itself, rather than the one file in it that the customer is
+// allowed to be handed: Restore Databases names that file in its own job
+// message, and a page naming their own tarball is not a leak. What must never
+// render is the admin backups directory as somewhere to browse.
+$t->notContains($t->page('user', 'alice', ['archive' => $archive, 'path' => '/home/admin/admin_backups']), 'admin_backups', 'a customer cannot browse the admin backups');
 $out = $t->page('user', 'alice', [], [
     'action'     => 'restore',
     'archive'    => $archive,

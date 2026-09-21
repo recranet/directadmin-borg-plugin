@@ -58,6 +58,16 @@
             <input type="hidden" name="archive" value="{{ user_panel.archive }}">
             <input type="hidden" name="username" value="{{ user_panel.username }}">
 
+            <div class="borg-field">
+                <label>
+                    <input type="checkbox" name="confirm" value="1">
+                    Replace what is in <span class="borg-mono">{{ user_panel.domains_path }}</span> now
+                </label>
+                <span class="borg-hint">
+                    There is no undo, and no copy of the current files is kept.
+                </span>
+            </div>
+
             <div class="borg-field" style="border-left:3px solid var(--borg-err);padding-left:12px">
                 <label>
                     <input type="checkbox" name="clean_first" value="1">
@@ -106,6 +116,17 @@
             <input type="hidden" name="action" value="restore_email">
             <input type="hidden" name="archive" value="{{ user_panel.archive }}">
             <input type="hidden" name="username" value="{{ user_panel.username }}">
+
+            <div class="borg-field">
+                <label>
+                    <input type="checkbox" name="confirm" value="1">
+                    Put the mail from this backup back into
+                    <span class="borg-mono">{{ user_panel.email_path }}</span>
+                </label>
+                <span class="borg-hint">
+                    Messages deleted after this date come back, and there is no undo.
+                </span>
+            </div>
 
             <div class="borg-actions">
                 <button class="borg-btn borg-btn-primary" type="submit">Restore Email</button>

@@ -11,7 +11,9 @@ that, untouched. The plugin is the restore end of it.
 - **Admin level** — point the plugin at the existing repository, browse its
   archives, and restore anything to anywhere, including a whole user account.
 - **User level** — each customer can browse their own home directory as it was
-  at any backup point and restore files themselves, without a support ticket.
+  at any backup point, put their website or their mail back, and have the
+  DirectAdmin backup holding their databases handed to them, without a support
+  ticket.
 
 Why split it this way: backup scripts are already solved, usually by something
 older and more carefully tuned than a control-panel plugin. Restores are the
@@ -252,9 +254,14 @@ tab-separated file per archive, looked up by binary search over byte offsets.
 Not SQLite: plugin scripts run on `php -n`, where no extension is guaranteed to
 be loaded. The only outside tool is `sort(1)`.
 
-A customer browsing at User Level uses the index when one exists and otherwise
-falls back to asking borg for their own subtree — slower, but they should not
-have to wait for an administrator before they can restore.
+User Level reads the same index, and offers the same one-off scan when a backup
+has not been indexed yet — the customer gets a **Prepare this backup** button, a
+live log and a page that reloads itself when the scan finishes, so they never
+wait on an administrator. It used to fall back to asking borg for their own
+subtree instead, which is a full pass over the archive for one directory
+listing: the page simply hung. Customer-triggered scans run one at a time across
+the server, because sixty customers each opening their own backup would
+otherwise be sixty passes over the same repository.
 
 ### Restores
 
@@ -297,15 +304,38 @@ gets less of it. Both levels run the same code
 depends on is the boundary an admin restore uses, and two copies of it would be
 two things to keep right.
 
-Two things the customer's version does not inherit:
+Both levels ask for a tick before a restore goes back over live files —
+*Replace what is in `/home/<user>/domains` now*, *Put the mail from this backup
+back into `/home/<user>/imap`*. It started as the customer's guard, on the
+grounds that they had clicked one large button and might not have read the
+warning beside it. That reasoning was never really about who was logged in: the
+admin screen's typed username only ever guarded the *deletion*, so the ordinary
+in-place restore — the one that actually gets clicked — went through on a single
+click there. It now asks on both.
 
-- **No pre-clean.** Deleting the directory before extracting is the malware
-  path — irreversible, and it takes everything the archive does not contain
-  with it. That stays a decision for whoever is handling the incident.
-- **It asks for a tick.** An administrator restoring in place typed a username
-  to get there. A customer clicked one large button and may not have read the
-  warning beside it, so the tick is the moment they say the current files can
-  go.
+### Restore and pre-clean are different operations
+
+Worth being explicit about, because "restore the backup" sounds like it should
+already mean this. A restore **overwrites**: every file in the backup replaces
+the one that is there, and every file that is *not* in the backup is left
+exactly where it is. That is what someone wants when a file was edited by
+mistake — and precisely not what they want when the site was hacked, because the
+webshell dropped in last week is not in the backup, so nothing replaces it and
+it survives the restore untouched.
+
+**Delete `/home/<user>/domains` first** is the other operation: empty the
+directory, then extract, so what is left is exactly what the backup held.
+Anything added since is gone with it — new sites, uploads, this month's
+customer data. It is never implied, at either level: tick it, and type the
+account name.
+
+Both levels offer it, for the same reason the restore itself is offered at both:
+the customer whose site was defaced is the one who notices, and telling them
+their only option is an overlay that leaves the attacker's file in place is
+telling them to open a ticket. The deletion is bounded by the account's own home
+in the page, again in `AccountTreeRestore::queue()`, and again in the worker
+before anything is removed; the home directory itself can never be the thing
+emptied.
 
 Restores in place are still enforced twice — once in the page and again in the
 worker against the resolved account, at the point of use. Turn the whole
@@ -336,6 +366,13 @@ the account's own backup directory, owned by the account. Then:
 1. Log in as that user.
 2. **User Level → Create/Restore Backups → Restore Backups**.
 3. Pick the file, tick **Databases**, restore.
+
+**Customers get this button too**, for their own account. It is if anything more
+at home there: the screen that imports the dump is a User Level screen, so the
+person who has to drive it is already logged in where the file lands, and steps
+1 and 2 collapse into the page they are already on. The tarball that can be
+handed over is only ever their own, matched against the logged-in account rather
+than anything the request carries.
 
 This is a route DirectAdmin documents: an admin-level backup placed in a user's
 `backups` directory and chowned to them restores from User Level. The plugin
@@ -687,9 +724,18 @@ real environment:
   it asks to deliver more than one path
 - the account panel at both levels, end to end: that the admin and customer
   buttons queue the same job for the same directory, owned by whoever started
-  it; that a customer's restore is refused without the tick; that a username
-  posted into a user-level restore is ignored rather than honoured; and that
-  the pre-clean is offered at Admin Level only
+  it; that a restore in place is refused without the tick at *either* level;
+  that a username posted into a user-level restore is ignored rather than
+  honoured; and that the pre-clean at either level needs the account name typed,
+  really does delete what the backup did not contain, and can never be pointed
+  at the home directory itself
+- Restore Databases at User Level: that the customer is offered their own
+  tarball and never another account's, that the delivery lands owned by them
+  and mode 0600, and that switching DirectAdmin backups off removes the card
+  and refuses a posted action rather than only hiding it
+- the customer's view of an unindexed backup: that the page offers the scan
+  instead of asking borg, that a second scan is refused while one is running,
+  and that the panel opens normally once it has finished
 - job retention, oversized directory listings, and log tailing past 64 KB
 
 ---

@@ -19,8 +19,12 @@
             back_url: url({})
         } %}
     {% else %}
-        {% if browser %}
+        {% if browser and browser.needs_index %}
+            {% include 'user/prepare.html.twig' with { prepare: browser } %}
+        {% elseif browser %}
             {% include 'user/browser.html.twig' %}
+        {% elseif panel and panel.needs_index %}
+            {% include 'user/prepare.html.twig' with { prepare: panel } %}
         {% elseif panel %}
             {% include 'user/account.html.twig' %}
         {% else %}

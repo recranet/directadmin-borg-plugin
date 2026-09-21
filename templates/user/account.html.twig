@@ -51,6 +51,33 @@
                     </span>
                 </div>
 
+                {# The two are not the same thing, which is the whole reason this
+                   is a second tick and not a footnote on the first: a restore
+                   puts the backup's files back over what is there and leaves
+                   everything else where it is. That is what a customer wants
+                   when a file was broken, and what they do not want when the
+                   site was hacked -- the file that was added is not in the
+                   backup, so nothing replaces it. #}
+                <div class="borg-field" style="border-left:3px solid var(--borg-err);padding-left:12px">
+                    <label>
+                        <input type="checkbox" name="clean_first" value="1">
+                        Delete everything in <span class="borg-mono">{{ panel.domains_path }}</span> first
+                    </label>
+                    <span class="borg-hint">
+                        Only for a hacked site. Without this, files added since the backup stay
+                        where they are &mdash; including anything an attacker left. With it, the
+                        directory ends up holding exactly what the backup held, and
+                        <strong>everything you have added since is gone</strong>: new sites,
+                        uploads, files you edited. There is no undo.
+                    </span>
+
+                    <div class="borg-field" style="margin-top:10px;margin-bottom:0">
+                        <label for="borg-user-clean-confirm">Type your username to confirm the deletion</label>
+                        <input type="text" id="borg-user-clean-confirm" name="clean_confirm" value=""
+                               style="max-width:220px" autocapitalize="off" autocorrect="off" spellcheck="false">
+                    </div>
+                </div>
+
                 <div class="borg-actions">
                     <button class="borg-btn borg-btn-primary" type="submit">Restore Domains</button>
                 </div>
@@ -96,6 +123,54 @@
             </form>
         {% endif %}
     </div>
+
+    {# ----------------------------------------------------------- databases #}
+    {# Only when the administrator has left DirectAdmin backups switched on:
+       with them off there is no tarball to hand over, and a card explaining a
+       setting a customer cannot change is noise on the page they came to for
+       help. #}
+    {% if panel.databases_on %}
+        <div class="borg-card">
+            <h2>Restore Databases</h2>
+
+            {% if not panel.admin_backup_name %}
+                <p class="borg-empty">
+                    There is no DirectAdmin backup of your account in this backup, and your
+                    databases are only in that.
+                </p>
+            {% else %}
+                <p class="borg-note" style="margin-top:0">
+                    Your databases are not in your home directory &mdash; DirectAdmin keeps them in
+                    its own backup of your account. This puts that file
+                    (<span class="borg-mono">{{ panel.admin_backup_name }}</span>{% if panel.admin_backup_size %},
+                    {{ panel.admin_backup_size|bytes }}{% endif %}) into
+                    <span class="borg-mono">{{ panel.backups_dir }}</span>, and you restore the
+                    databases from it yourself:
+                </p>
+                <ol class="borg-note">
+                    <li>Go to <strong>Create/Restore Backups &rarr; Restore Backups</strong>.</li>
+                    <li>Pick <span class="borg-mono">{{ panel.admin_backup_name }}</span>.</li>
+                    <li>Tick <strong>Databases</strong>, and restore.</li>
+                </ol>
+                <p class="borg-note">
+                    This button changes nothing by itself; the step that replaces your live
+                    databases is the one you take on that screen. The file stays in
+                    <span class="borg-mono">{{ panel.backups_dir }}</span> and counts against your
+                    disk space until you delete it.
+                </p>
+
+                <form method="post" action="{{ url({}) }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <input type="hidden" name="action" value="restore_databases">
+                    <input type="hidden" name="archive" value="{{ panel.archive }}">
+
+                    <div class="borg-actions">
+                        <button class="borg-btn borg-btn-primary" type="submit">Restore Databases</button>
+                    </div>
+                </form>
+            {% endif %}
+        </div>
+    {% endif %}
 
     {# ----------------------------------------------------------- the files #}
     <div class="borg-card">

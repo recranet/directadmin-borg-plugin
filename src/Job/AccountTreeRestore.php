@@ -60,10 +60,12 @@ final class AccountTreeRestore
      * not the same question as whose files these are.
      *
      * $cleanPaths is the malware case, and it is a parameter rather than a
-     * given precisely because only one of the two callers may use it: deleting
-     * the directory before extracting is irreversible and takes everything the
-     * archive does not contain with it. Admin Level ticks it and types the
-     * username; User Level cannot ask for it at all.
+     * given because it is never implied: a restore on its own overwrites and
+     * leaves everything else alone, which is why the file an attacker added
+     * survives one. Deleting first is the only thing that makes the directory
+     * exactly what the archive held, and it takes everything added since with
+     * it. Both levels ask for it the same way -- tick it, and type the account
+     * name -- because the mistake is the same mistake whoever is logged in.
      *
      * @param string[] $cleanPaths directories to delete before extracting
      */

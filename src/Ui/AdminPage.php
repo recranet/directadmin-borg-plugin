@@ -395,6 +395,18 @@ final class AdminPage
         $target = AccountTreeRestore::path($account, $subdirectory);
         $label = AccountTreeRestore::label($subdirectory);
 
+        // The same tick User Level asks for, and for the same reason: this
+        // writes over live files with no undo, and the button that starts it
+        // sits under a paragraph explaining what it does. Admin Level used to
+        // treat the typed username as the confirmation, but that one only
+        // appears when the directory is being deleted first -- the ordinary
+        // restore, which is the one that actually gets clicked, had none.
+        if (!$this->request->bodyBool('confirm')) {
+            $this->flash->error(\sprintf('Tick the box to confirm that what is in %s now should be replaced with the backup.', $target));
+
+            return;
+        }
+
         // Deleting first is the malware case: a restore only adds and
         // overwrites, so a webshell dropped since the backup would survive one.
         // It is never implied -- the operator ticks it and types the username.
