@@ -103,6 +103,45 @@ sh /usr/local/directadmin/plugins/borg/scripts/install.sh
 and required extensions, sets ownership and permissions, and creates the state
 directory. From a source checkout, build the tarball first with `make package`.
 
+### Installing or updating several servers
+
+`scripts/deploy.sh` does the whole thing over ssh, for one host or a fleet:
+
+```sh
+make deploy HOSTS="host1 host2"    # builds the tarball, then deploys
+sh scripts/deploy.sh host1 host2   # deploys dist/borg.tar.gz as it stands
+```
+
+Hosts are arguments rather than a list in the repository, because which servers
+run this plugin is deployment detail.
+
+Each host is refused *before* anything is touched if its `/usr/local/bin/php` is
+below the floor, borg is missing, or a job is running. The PHP check is the one
+that earns its place: `install.sh` only runs after the swap, so a server that
+cannot meet the floor would otherwise be left holding a plugin it cannot start.
+
+Then it extracts to `plugins/borg.new`, checks that tree is complete, renames
+the running plugin to `/root/borg.bak-<version>` and the new one into place, and
+runs `install.sh`. A swap rather than an extract over the top, so a file deleted
+since the installed version does not survive the upgrade. The rollback copy goes
+to `/root` and never beside the plugin — DirectAdmin treats any directory under
+`plugins/` holding a `plugin.conf` as an installed plugin, so a copy there shows
+up as a second "Borg Backup" in the Plugin Manager.
+
+Afterwards it verifies the version, that `config.json` is byte-identical, that
+no `borg.new` or rollback copy was left in `plugins/`, that `borg:status` reads
+the repository, and that the admin and user pages render. That last one is not
+redundant: `borg:status` goes through the console and would miss a template or
+request-decoding failure, which is exactly what a dependency bump can introduce.
+
+To roll back, move the copy back — no `install.sh`, and nothing in
+`/var/lib/directadmin-borg/` was touched:
+
+```sh
+ssh root@host 'cd /usr/local/directadmin/plugins &&
+               rm -rf borg && mv /root/borg.bak-2.3.0 borg'
+```
+
 ### Upgrading from 1.x
 
 2.0 removed the backup side entirely. Upload the new tarball as usual; nothing

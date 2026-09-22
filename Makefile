@@ -8,7 +8,7 @@
 PHP  := docker run --rm -v "$$PWD":/app -w /app -e PHP_CS_FIXER_IGNORE_ENV=1 php:8.2-cli-bookworm php
 COMP := docker run --rm -v "$$PWD":/app -w /app composer:2 composer
 
-.PHONY: help install check test stan cs cs-fix lint package clean
+.PHONY: help install check test stan cs cs-fix lint package deploy clean
 
 help:
 	@echo "make check     stan + cs + lint + test  (run this before committing)"
@@ -18,6 +18,7 @@ help:
 	@echo "make cs-fix    Coding standards, apply fixes"
 	@echo "make lint      Parse-check PHP and compile every Twig template"
 	@echo "make package   Build dist/borg.tar.gz for DirectAdmin"
+	@echo 'make deploy    Install or update on servers: make deploy HOSTS="a b"'
 	@echo "make install   Install composer dependencies locally"
 	@echo "make clean     Remove build output and tool caches"
 
@@ -45,6 +46,12 @@ test:
 
 package:
 	sh scripts/package.sh
+
+# Hosts are passed in rather than listed here: which servers run this plugin is
+# deployment detail, and this repository is public.
+deploy: package
+	@test -n "$(HOSTS)" || { echo 'Usage: make deploy HOSTS="host1 host2"' >&2; exit 1; }
+	sh scripts/deploy.sh $(HOSTS)
 
 clean:
 	rm -rf dist .php-cs-fixer.cache
