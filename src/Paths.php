@@ -16,8 +16,8 @@ use Symfony\Component\Filesystem\Filesystem;
  *
  * Plain methods rather than property hooks: DirectAdmin runs plugin scripts on
  * whatever CLI binary /usr/local/bin/php points at, which CustomBuild lets an
- * administrator pin as far back as PHP 5.6. This plugin requires 8.1, so
- * nothing here may use 8.2+ syntax.
+ * administrator pin as far back as PHP 5.6. This plugin requires 8.2, so
+ * nothing here may use 8.3+ syntax -- property hooks arrived in 8.4.
  */
 final class Paths
 {

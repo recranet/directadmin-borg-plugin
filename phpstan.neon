@@ -17,6 +17,6 @@ parameters:
     # The plugin runs with -n (no php.ini) so a hardened CLI ini cannot disable
     # proc_open. Extensions therefore have to be compiled in, and only these are
     # relied upon.
-    phpVersion: 80100
+    phpVersion: 80200
 
     treatPhpDocTypesAsCertain: false

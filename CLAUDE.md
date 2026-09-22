@@ -19,10 +19,12 @@ slow. Every tool runs in Docker; nothing needs installing locally.
 
 ## Hard constraints
 
-**PHP 8.1 is the floor.** DirectAdmin executes plugin scripts on whatever
+**PHP 8.2 is the floor.** DirectAdmin executes plugin scripts on whatever
 `/usr/local/bin/php` points at, which CustomBuild lets an administrator pin. No
-8.2+ syntax — no property hooks, no readonly classes, no standalone `null`
-types. `make stan` and `make lint` run on 8.1 and are what hold the line.
+8.3+ syntax — no typed class constants, no `#[Override]`, no property hooks.
+`make stan` and `make lint` run on 8.2 and are what hold the line. The floor
+moved up from 8.1 once every server in the fleet was verified on 8.2 or newer;
+it is what lets the plugin be on Symfony 7.4, since no 7.x branch accepts 8.1.
 
 **Scripts run with `php -n`**, so no `php.ini` and no guaranteed extensions.
 Nothing may depend on an extension that is not compiled in — this is why the

@@ -101,11 +101,20 @@ final class PluginRequest
         return $parsed;
     }
 
+    /**
+     * Symfony 7 made InputBag generic, and HttpFoundation types its own bags as
+     * InputBag<string>. parse_str can still nest an array under a key, which
+     * the generic does not express — every accessor here either rejects a
+     * non-scalar (getString, getBoolean) or checks for one first (bodyList).
+     *
+     * @return InputBag<string>
+     */
     public function query(): InputBag
     {
         return $this->request->query;
     }
 
+    /** @return InputBag<string> */
     public function body(): InputBag
     {
         return $this->request->request;

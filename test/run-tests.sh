@@ -38,7 +38,7 @@ fi
 echo "==> Running the production installer"
 sh "$PLUGIN_DIR/scripts/install.sh"
 
-# The plugin's own code must parse on the PHP this container pins (8.1), which
+# The plugin's own code must parse on the PHP this container pins (8.2), which
 # is the native /usr/local/bin/php on the target servers. vendor/ is excluded:
 # it is upstream code, already constrained by composer's platform setting.
 echo "==> Linting plugin sources on PHP $(php -r 'echo PHP_VERSION;')"

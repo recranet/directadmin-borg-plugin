@@ -21,14 +21,17 @@ fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 # which CustomBuild sets from php1_release and which is not necessarily the
 # first php on PATH.
 PHP_BIN=""
+# php81 is below the floor and can never satisfy the check below; it stays in
+# the list so an 8.1-only server fails on the version rather than on "no PHP
+# found", which sends the administrator looking for the wrong problem.
 for candidate in /usr/local/bin/php /usr/local/php84/bin/php /usr/local/php83/bin/php \
                  /usr/local/php82/bin/php /usr/local/php81/bin/php /usr/bin/php; do
     if [ -x "$candidate" ]; then PHP_BIN="$candidate"; break; fi
 done
 [ -n "$PHP_BIN" ] || fail "No PHP CLI binary found. With CustomBuild: da build php_cli"
 
-PHP_OK=$("$PHP_BIN" -n -r 'echo PHP_VERSION_ID >= 80100 ? "yes" : "no";' 2>/dev/null || echo no)
-[ "$PHP_OK" = "yes" ] || fail "$PHP_BIN is older than PHP 8.1, which this plugin requires."
+PHP_OK=$("$PHP_BIN" -n -r 'echo PHP_VERSION_ID >= 80200 ? "yes" : "no";' 2>/dev/null || echo no)
+[ "$PHP_OK" = "yes" ] || fail "$PHP_BIN is older than PHP 8.2, which this plugin requires."
 log "Using PHP: $PHP_BIN ($("$PHP_BIN" -n -r 'echo PHP_VERSION;'))"
 
 # The plugin runs PHP with -n (no php.ini) so that a hardened CLI ini cannot

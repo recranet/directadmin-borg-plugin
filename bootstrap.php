@@ -15,10 +15,10 @@ if (\PHP_SAPI !== 'cli') {
     exit("This script must be executed by DirectAdmin.\n");
 }
 
-if (\PHP_VERSION_ID < 80100) {
+if (\PHP_VERSION_ID < 80200) {
     // CustomBuild lets an administrator pin /usr/local/bin/php as far back as
     // 5.6; fail with a clear message rather than a parse error.
-    fwrite(\STDERR, 'The Borg plugin requires PHP 8.1 or newer; found ' . \PHP_VERSION . ".\n");
+    fwrite(\STDERR, 'The Borg plugin requires PHP 8.2 or newer; found ' . \PHP_VERSION . ".\n");
     exit(1);
 }
 

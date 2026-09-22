@@ -2,7 +2,7 @@
 # Build a release tarball for the DirectAdmin plugin manager.
 #
 # The tarball ships vendor/ so the target server needs neither composer nor
-# network access. Dependencies are resolved against PHP 8.1 (composer.json pins
+# network access. Dependencies are resolved against PHP 8.2 (composer.json pins
 # config.platform.php), matching the native /usr/local/bin/php on the target
 # servers.
 #

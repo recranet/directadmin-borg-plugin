@@ -62,7 +62,7 @@ twice — once in the page, and again in the worker at the point of use
 | | |
 |---|---|
 | DirectAdmin | 1.689 or newer (for `*_run_as=root`) |
-| PHP | 8.1 or newer, as the CLI at `/usr/local/bin/php` |
+| PHP | 8.2 or newer, as the CLI at `/usr/local/bin/php` |
 | borg | 1.1–1.4 (borg 2.x changed the CLI and is not supported yet) |
 
 PHP is the native CustomBuild CLI (`php1_release`), not alt-php: DirectAdmin
@@ -483,9 +483,9 @@ files included. It is disposable — deleting it costs one rescan.
 
 ### Which Symfony components, and why
 
-All of them are Symfony 6.4, which the PHP 8.1 floor decides: 7.0 and everything
-after it require 8.2, so no newer branch resolves at all. That it is also an LTS
-is luck rather than judgement — a convenient place to be stuck.
+All of them are Symfony 7.4, the current LTS. The branch is decided by the PHP
+floor rather than chosen: 7.x requires 8.2, which is why the plugin sat on 6.4
+until the floor moved up, and 8.0 requires 8.4, which no fleet runs yet.
 
 | Component | Used for |
 |---|---|
@@ -531,7 +531,7 @@ were fixed rather than suppressed. Coding standards are PSR-12 plus the Symfony
 ruleset, with the risky rules enabled: `strict_comparison` and `strict_param`
 catch real bugs, not just layout.
 
-All tooling runs in containers pinned to PHP 8.1, so results do not depend on
+All tooling runs in containers pinned to PHP 8.2, so results do not depend on
 the local PHP. Dev dependencies are `require-dev`, and `scripts/package.sh`
 builds `vendor/` inside its staging copy with `--no-dev`, so neither PHPStan nor
 PHP-CS-Fixer reaches a production server — and packaging never disturbs the
@@ -559,9 +559,10 @@ is what proves it against a real borg 1.1 rather than a stub. `alma9-borg14` is
 out of the default run because no EL repository carries borg 1.4, so installing
 it means pip and a build toolchain — it is there for the day EPEL moves.
 
-PHP is 8.2 on both, which is what the servers run; the 8.1 floor is held by
-`make lint` and `make stan`, which run on 8.1, so syntax newer than the minimum
-cannot slip in.
+PHP is 8.2 on both, which is both the floor and the oldest version any server
+runs — so unlike before, the matrix exercises the minimum rather than sitting
+above it. `make lint` and `make stan` run on 8.2 too, so syntax newer than the
+floor cannot slip in.
 
 Each image carries a `/home` with two customer accounts at DirectAdmin's `0711`
 permissions, DirectAdmin-style admin backups, an sshd for remote-repository
