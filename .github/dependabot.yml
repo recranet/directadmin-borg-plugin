@@ -1,0 +1,37 @@
+# Security updates only. open-pull-requests-limit: 0 switches off routine
+# version bumps while leaving Dependabot security updates on, so a PR from here
+# always means an advisory. Security updates themselves are enabled in the
+# repository settings, not in this file.
+#
+# The plugin stays on the Symfony 7.4 LTS: composer.json's ^7.4 already rules
+# out 8.x, and the ignore below keeps a security PR from ever proposing a major
+# jump across it -- the fix for an LTS lands on the LTS. Moving to 8.x is a
+# deliberate change to composer.json and the PHP floor, not a Dependabot PR.
+version: 2
+
+updates:
+  - package-ecosystem: composer
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    ignore:
+      - dependency-name: "symfony/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "twig/twig"
+        update-types: ["version-update:semver-major"]
+    groups:
+      # One PR when an advisory lands across several Symfony components.
+      symfony-security:
+        applies-to: security-updates
+        patterns: ["symfony/*"]
+
+  # Actions are pinned to a commit, so an advisory against one arrives here as
+  # a PR moving the pin.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    cooldown:
+      default-days: 7

@@ -1,0 +1,53 @@
+# The same gate as `make check`, run through the same Makefile targets, so CI
+# and a workstation cannot disagree about what passing means. Everything runs in
+# the containers the Makefile and test/docker-test.sh already pin (PHP 8.2 for
+# tooling, AlmaLinux with EPEL borg for the suite); the runner only needs Docker.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+# Nothing here writes to the repository or publishes anything.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  static:
+    name: stan, cs, lint, audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: make install
+      - run: make stan
+      - run: make cs
+      - run: make lint
+      # Fails on a known advisory against anything in composer.lock, dev tools
+      # included. Dependabot opens the fix; this is what stops a merge before it.
+      - run: make audit
+
+  test:
+    name: suite (${{ matrix.env }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # The default matrix of test/docker-test.sh. alma9-borg14 stays opt-in
+      # here too: it builds borg from pip, which no server does.
+      matrix:
+        env: [alma9, alma8]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The suite runs on the working tree's vendor/, dev tools included, so it
+      # runs PHPStan inside the EL image as well.
+      - run: make install
+      - run: test/docker-test.sh ${{ matrix.env }}
