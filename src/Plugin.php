@@ -140,9 +140,29 @@ final class Plugin
 
     public function renderer(): TemplateRenderer
     {
-        return $this->renderer ??= new TemplateRenderer(
-            $this->pluginDir . '/templates',
-            $this->paths->cacheDir()
-        );
+        if ($this->renderer === null) {
+            $this->renderer = new TemplateRenderer($this->pluginDir . '/templates', $this->paths->cacheDir());
+            // In the footer of every page, so "which version is this server
+            // on" is answered by looking rather than by shelling in.
+            $this->renderer->environment()->addGlobal('plugin_version', $this->version());
+        }
+
+        return $this->renderer;
+    }
+
+    /**
+     * The installed version, from plugin.conf rather than a second copy that
+     * drifts: it is what a release commit bumps and what DirectAdmin's own
+     * plugin manager shows.
+     */
+    public function version(): string
+    {
+        foreach (@file($this->pluginDir . '/plugin.conf', \FILE_IGNORE_NEW_LINES) ?: [] as $line) {
+            if (str_starts_with($line, 'version=')) {
+                return trim(substr($line, 8));
+            }
+        }
+
+        return '0.0.0';
     }
 }

@@ -812,6 +812,12 @@ $t->contains($out, 'Repository', 'tabs render');
 $t->notContains($out, 'Fatal error', 'no PHP errors leak into the page');
 $t->notContains($out, 'not root', 'no root warning is shown when running as root');
 
+// Read from plugin.conf, the one place a release bumps it.
+$installedVersion = $plugin->version();
+$t->ok(preg_match('/^\d+\.\d+\.\d+$/', $installedVersion) === 1, 'the version is read from plugin.conf: ' . $installedVersion);
+$t->contains($out, 'Borg Backup ' . $installedVersion . '</footer>', 'the admin page shows it in the footer');
+$t->contains($t->page('user', 'alice'), 'Borg Backup ' . $installedVersion . '</footer>', 'and so does User Level');
+
 // The list is dates, not archive names: the name is noise on every row and
 // identical apart from the timestamp already shown. It still has to be in the
 // link target, so the check is against the visible text only.
