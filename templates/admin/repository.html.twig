@@ -100,6 +100,22 @@
                 came from &mdash; overwriting what is there now.
             </span>
         </div>
+
+        <div class="borg-field">
+            <label for="borg-paused-from">Pause restores during the server backup</label>
+            <span>
+                <input type="time" id="borg-paused-from" name="jobs_paused_from" value="{{ config.jobs_paused_from }}">
+                to
+                <input type="time" id="borg-paused-until" name="jobs_paused_until" value="{{ config.jobs_paused_until }}">
+            </span>
+            <span class="borg-hint">
+                No restore, index or check starts in these hours, at either level. Every one of
+                them reads the repository, and a backup that starts while one is reading fails
+                on the lock instead of waiting. Open the window well before the backup starts:
+                a job already running when it opens is left to finish. Server time
+                ({{ server_timezone }}). Clear both to switch it off.
+            </span>
+        </div>
     </div>
 
     <div class="borg-card">

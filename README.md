@@ -221,6 +221,30 @@ Two things there decide what you can restore:
   (`user.admin.alice.tar.zst`); the plain `<user>.tar.zst` form is accepted too.
   Restoring a whole account needs both, from the same archive.
 
+### The backup window
+
+Every restore, index and check the plugin runs reads the repository, and a read
+holds borg's repository lock for as long as it runs. `borg create` needs that
+lock to itself and waits one second for it by default. So a backup that starts
+while the plugin is reading does not wait its turn. It fails with "Failed to
+create/acquire the lock", for every account on the server, and the only place
+that says so is the backup script's own log. The test suite shows this on real
+borg 1.1 and 1.2.
+
+`--lock-wait` on the backup would fix it from that side, but the backup script
+belongs to the server. So the plugin keeps out of the way instead. Under
+**Repository → Pause restores during the server backup** (00:00–07:00 by
+default, in the server's own timezone), no restore, index or check starts, at
+either level. The pages say so before anything is clicked, and the worker checks
+again before it touches the repository, so a job queued a moment before the
+window does not start after it opens. A job already running when the window
+opens is left to finish, so open the window well before the backup starts.
+Clear both times to switch it off.
+
+Outside the window, a customer cannot keep a scan running back to back either:
+a backup that is already prepared is not prepared again, and only one runs at a
+time across the server.
+
 ### What a borg "version" is
 
 There are no version numbers. A repository holds archives, and each archive

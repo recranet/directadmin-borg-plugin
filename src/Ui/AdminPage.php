@@ -12,6 +12,7 @@ use Recranet\DirectAdminBorg\Config\Configuration;
 use Recranet\DirectAdminBorg\Exception\BorgPluginException;
 use Recranet\DirectAdminBorg\Http\PluginRequest;
 use Recranet\DirectAdminBorg\Job\AccountTreeRestore;
+use Recranet\DirectAdminBorg\Job\BackupWindow;
 use Recranet\DirectAdminBorg\Job\Job;
 use Recranet\DirectAdminBorg\Plugin;
 use Recranet\DirectAdminBorg\Security\Account;
@@ -59,6 +60,10 @@ final class AdminPage
     {
         if ($this->request->isPost()) {
             $this->handlePost();
+        } elseif ($this->plugin->backupWindow()->isActive()) {
+            // Said up front rather than after a click. A refused POST already
+            // says it, as its error.
+            $this->flash->warning($this->plugin->backupWindow()->message());
         }
 
         // Reload: a POST may have changed the repository or the secrets.
@@ -164,6 +169,8 @@ final class AdminPage
             'admin_backups_dir'    => $body->getString('admin_backups_dir'),
             'restore_admin_backup' => $this->request->bodyBool('restore_admin_backup'),
             'user_restore_enabled' => $this->request->bodyBool('user_restore_enabled'),
+            'jobs_paused_from'     => trim($body->getString('jobs_paused_from')),
+            'jobs_paused_until'    => trim($body->getString('jobs_paused_until')),
         ]);
         foreach ($errors as $error) {
             $this->flash->error($error);
@@ -258,6 +265,8 @@ final class AdminPage
             return;
         }
 
+        $this->plugin->backupWindow()->assertOpen();
+
         $job = $this->plugin->jobs()->create($type, $this->request->username, ['trigger' => 'manual']);
         $this->plugin->dispatcher()->dispatch($job);
 
@@ -283,6 +292,8 @@ final class AdminPage
         $files = $this->request->body()->has('index_files')
             ? $this->request->bodyBool('index_files')
             : $this->plugin->config()->load()->indexFiles();
+
+        $this->plugin->backupWindow()->assertOpen();
 
         $job = $this->plugin->jobs()->create(
             Job::TYPE_INDEX,
@@ -796,6 +807,8 @@ final class AdminPage
             throw new BorgPluginException(\sprintf('Refusing to restore directly into %s. Restore into a staging directory and move files from there.', $destination));
         }
 
+        $this->plugin->backupWindow()->assertOpen();
+
         $job = $this->plugin->jobs()->create(Job::TYPE_RESTORE, $this->request->username, array_filter([
             'archive'      => $archive,
             'paths'        => $paths,
@@ -908,6 +921,7 @@ final class AdminPage
             'has_passphrase'  => $config->hasPassphrase(),
             'passphrase_file' => $this->plugin->paths->passphraseFile(),
             'config_file'     => $this->plugin->paths->configFile(),
+            'server_timezone' => BackupWindow::systemTimezone()->getName(),
         ];
     }
 

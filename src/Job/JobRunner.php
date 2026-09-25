@@ -50,6 +50,14 @@ final class JobRunner
                 return $this->finish($job, Job::STATUS_FAILED, 2, 'No repository is configured.');
             }
 
+            // Checked again here, not only when the page queued it: a job
+            // queued a moment before the window must not start after it has
+            // opened. See BackupWindow.
+            $window = BackupWindow::fromConfiguration($config);
+            if ($window->isActive()) {
+                return $this->finish($job, Job::STATUS_FAILED, 75, 'Not started. ' . $window->message());
+            }
+
             // A restore may always run: it must stay possible while a check,
             // or the server's own backup cron, has the repository busy.
             if (\in_array($job->type(), Job::EXCLUSIVE_TYPES, true)) {

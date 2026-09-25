@@ -150,7 +150,7 @@ final class ConfigRepository
         foreach (['restore_admin_backup', 'user_restore_enabled', 'index_files'] as $key) {
             $values[$key] = $this->toBool($values[$key] ?? false);
         }
-        foreach (['repository', 'ssh_command', 'admin_backups_dir', 'archive_date_format'] as $key) {
+        foreach (['repository', 'ssh_command', 'admin_backups_dir', 'archive_date_format', 'jobs_paused_from', 'jobs_paused_until'] as $key) {
             $values[$key] = trim((string) ($values[$key] ?? ''));
         }
 

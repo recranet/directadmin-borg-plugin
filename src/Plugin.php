@@ -8,6 +8,7 @@ use Recranet\DirectAdminBorg\Borg\ArchiveIndex;
 use Recranet\DirectAdminBorg\Borg\BorgRunner;
 use Recranet\DirectAdminBorg\Borg\Repository;
 use Recranet\DirectAdminBorg\Config\ConfigRepository;
+use Recranet\DirectAdminBorg\Job\BackupWindow;
 use Recranet\DirectAdminBorg\Job\JobDispatcher;
 use Recranet\DirectAdminBorg\Job\JobRepository;
 use Recranet\DirectAdminBorg\Ui\TemplateRenderer;
@@ -111,6 +112,12 @@ final class Plugin
     public function jobs(): JobRepository
     {
         return $this->jobs ??= new JobRepository($this->paths, $this->filesystem());
+    }
+
+    /** Not memoised: it is read from the configuration, which a request can change. */
+    public function backupWindow(): BackupWindow
+    {
+        return BackupWindow::fromConfiguration($this->config()->load());
     }
 
     public function dispatcher(): JobDispatcher

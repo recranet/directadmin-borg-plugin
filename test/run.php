@@ -21,6 +21,7 @@ use Recranet\DirectAdminBorg\Borg\Repository;
 use Recranet\DirectAdminBorg\Config\Configuration;
 use Recranet\DirectAdminBorg\Http\PluginRequest;
 use Recranet\DirectAdminBorg\Job\AccountTreeRestore;
+use Recranet\DirectAdminBorg\Job\BackupWindow;
 use Recranet\DirectAdminBorg\Job\Job;
 use Recranet\DirectAdminBorg\Job\JobRunner;
 use Recranet\DirectAdminBorg\Security\Account;
@@ -650,6 +651,17 @@ $t->ok($t->waitForJob($plugin, $prepJob->id, 300)?->status() === Job::STATUS_SUC
 $t->ok($plugin->archiveIndex()->exists($archive), 'and the index is back for the rest of the suite');
 
 $t->contains($t->page('user', 'alice', ['archive' => $archive]), 'Restore Domains', 'the panel opens normally once it is prepared');
+
+// Asking again would keep a scan reading the repository back to back, which is
+// how a customer could get in the way of the server's own backup.
+$indexJobsBefore = count($plugin->jobs()->recent(100, null, Job::TYPE_INDEX));
+$out = $t->page('user', 'alice', ['archive' => $archive], [
+    'action'     => 'build_index',
+    'archive'    => $archive,
+    'csrf_token' => $customerToken(),
+], 'POST');
+$t->contains($out, 'already prepared', 'preparing a backup that is already prepared is refused');
+$t->is(count($plugin->jobs()->recent(100, null, Job::TYPE_INDEX)), $indexJobsBefore, 'and no scan is queued');
 
 $t->group('A customer restoring a whole directory');
 
@@ -1790,6 +1802,117 @@ $post([
     'restore_admin_backup' => '1',
     'user_restore_enabled' => '1',
 ]);
+
+$t->group('A plugin read makes the server backup fail');
+
+// The premise of the backup window, shown on real borg rather than taken from
+// the documentation: a read holds the repository's shared lock for as long as
+// it runs, and borg create, which needs it exclusively, waits one second and
+// gives up. A reader slow to drain a large file holds it long enough.
+$windowRepo = '/backup/window-repo';
+$plugin->filesystem()->remove([$windowRepo, '/tmp/borg-window-big']);
+$externalInit($windowRepo);
+$t->exec(['/bin/sh', '-c', 'head -c 50000000 /dev/urandom > /tmp/borg-window-big']);
+$externalArchive($windowRepo, 'big', ['/tmp/borg-window-big']);
+
+$reader = proc_open(
+    ['/bin/sh', '-c', 'borg extract --stdout "$1::big" tmp/borg-window-big | (sleep 10; cat >/dev/null)', 'sh', $windowRepo],
+    [0 => ['file', '/dev/null', 'r'], 1 => ['file', '/dev/null', 'w'], 2 => ['file', '/dev/null', 'w']],
+    $readerPipes,
+    '/',
+    ['PATH' => getenv('PATH') ?: '/usr/bin:/bin', 'HOME' => '/root', 'BORG_UNKNOWN_UNENCRYPTED_REPO_ACCESS_IS_OK' => 'yes']
+);
+sleep(3);
+$nightly = $externalArchive($windowRepo, 'nightly', ['/etc/passwd']);
+$t->is($nightly->exitCode, 2, 'a backup started while the plugin reads fails outright');
+$t->contains($nightly->stderr, 'lock', 'on the repository lock, not on anything it read');
+proc_close($reader);
+$plugin->filesystem()->remove([$windowRepo, '/tmp/borg-window-big']);
+
+$t->group('No job starts during the backup window');
+
+$utc = new DateTimeZone('UTC');
+$windowOf = static fn (string $from, string $until, ?DateTimeZone $zone = null) => BackupWindow::fromConfiguration(
+    $plugin->config()->load()->withValues(['jobs_paused_from' => $from, 'jobs_paused_until' => $until]),
+    $zone ?? $utc
+);
+$at = static fn (string $time) => new DateTimeImmutable('2026-01-15 ' . $time, $utc);
+
+$night = $windowOf('00:00', '07:00');
+$t->ok($night->isActive($at('03:00')), 'the middle of the night is inside 00:00-07:00');
+$t->ok($night->isActive($at('00:00')), 'the window includes its first minute');
+$t->notOk($night->isActive($at('07:00')), 'and ends as its last minute does');
+$t->notOk($night->isActive($at('23:59')), 'the evening before is outside it');
+
+$wrapping = $windowOf('22:00', '07:00');
+$t->ok($wrapping->isActive($at('23:30')) && $wrapping->isActive($at('06:30')), 'a window across midnight covers both sides of it');
+$t->notOk($wrapping->isActive($at('12:00')), 'and not the day between');
+
+$t->notOk($windowOf('', '')->isEnabled(), 'both times empty is no window');
+$t->notOk($windowOf('00:00', '')->isEnabled(), 'nor is half of one');
+$t->notOk($windowOf('03:00', '03:00')->isEnabled(), 'nor one that ends where it starts');
+
+// Cron reads the server's own zone, and under php -n PHP's is UTC whatever the
+// server says. 23:30 UTC is 00:30 in Amsterdam, inside a 00:00 window there.
+$lateUtc = new DateTimeImmutable('2026-01-15 23:30', $utc);
+$t->notOk($windowOf('00:00', '07:00', $utc)->isActive($lateUtc), 'in UTC, 23:30 is before the window');
+$t->ok($windowOf('00:00', '07:00', new DateTimeZone('Europe/Amsterdam'))->isActive($lateUtc), 'in the server\'s zone, the same moment is inside it');
+$t->is(BackupWindow::systemTimezone()->getName(), 'UTC', 'the zone is read from /etc/localtime, which this container sets to UTC');
+
+// Now through the pages, with a window open around the current time.
+$zone = BackupWindow::systemTimezone();
+$now = new DateTimeImmutable('now', $zone);
+$saved = $post([
+    'action'               => 'save_repository',
+    'repository'           => '/backup/test-repo',
+    'admin_backups_dir'    => '/home/admin/admin_backups',
+    'restore_admin_backup' => '1',
+    'user_restore_enabled' => '1',
+    'jobs_paused_from'     => $now->modify('-1 hour')->format('H:i'),
+    'jobs_paused_until'    => $now->modify('+1 hour')->format('H:i'),
+]);
+$t->contains($saved, 'Repository found and saved', 'the window saves with the rest of the settings');
+$t->ok($plugin->backupWindow()->isActive(), 'and is open now');
+
+$t->contains($t->page('admin', 'admin', ['tab' => 'overview']), 'paused between', 'Admin Level says so before anything is clicked');
+$t->contains($t->page('user', 'alice'), 'paused between', 'and so does User Level');
+
+$jobsBefore = count($plugin->jobs()->recent(500));
+$t->contains($post(['action' => 'run_check']), 'paused between', 'a repository check is refused');
+$t->contains($t->page('user', 'alice', [], [
+    'action'     => 'restore',
+    'archive'    => $archive,
+    'paths'      => ['/home/alice/domains'],
+    'csrf_token' => $customerToken(),
+], 'POST'), 'paused between', 'a customer restore is refused');
+$t->contains($restoreTree('restore_domains', ['confirm' => '1']), 'paused between', 'so is restoring a whole directory');
+$t->is(count($plugin->jobs()->recent(500)), $jobsBefore, 'and none of them queued a job');
+
+// A job queued just before the window opened, reaching the worker after.
+// Owned by admin, so its message does not show among alice's own restores.
+$early = $plugin->jobs()->create(Job::TYPE_RESTORE, 'admin', [
+    'archive'     => $archive,
+    'paths'       => ['/home/alice/domains'],
+    'destination' => '/',
+    'in_place'    => true,
+    'confine_to'  => 'alice',
+]);
+$runJob($early);
+$early = $plugin->jobs()->find($early->id);
+$t->is($early->status(), Job::STATUS_FAILED, 'the worker does not start a job once the window is open');
+$t->contains($early->message(), 'Not started', 'and says it never began, rather than that it failed partway');
+
+$t->contains($post([
+    'action'            => 'save_repository',
+    'repository'        => '/backup/test-repo',
+    'admin_backups_dir' => '/home/admin/admin_backups',
+    'jobs_paused_from'  => '25:00',
+    'jobs_paused_until' => '07:00',
+]), 'HH:MM', 'a time that is not a time is refused');
+
+$plugin->config()->save(['jobs_paused_from' => '', 'jobs_paused_until' => '', 'restore_admin_backup' => true, 'user_restore_enabled' => true]);
+$t->notOk($plugin->backupWindow()->isActive(), 'cleared, the window is off');
+$t->notContains($t->page('user', 'alice'), 'paused between', 'and the pages stop saying so');
 
 $t->group('The backup actions are gone, not hidden');
 

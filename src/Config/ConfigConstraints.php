@@ -69,6 +69,18 @@ final class ConfigConstraints
                     message: 'Backup date format must be a single line.',
                 ),
             ],
+            'jobs_paused_from' => [
+                new Assert\Regex(
+                    pattern: '/^(|([01]\d|2[0-3]):[0-5]\d)$/',
+                    message: 'The backup window must be given as HH:MM, such as 00:00.',
+                ),
+            ],
+            'jobs_paused_until' => [
+                new Assert\Regex(
+                    pattern: '/^(|([01]\d|2[0-3]):[0-5]\d)$/',
+                    message: 'The backup window must be given as HH:MM, such as 07:00.',
+                ),
+            ],
             'index_files'          => [new Assert\Type('bool')],
             'restore_admin_backup' => [new Assert\Type('bool')],
             'user_restore_enabled' => [new Assert\Type('bool')],

@@ -95,6 +95,8 @@ final class AccountTreeRestore
             $clean[] = $path;
         }
 
+        $this->plugin->backupWindow()->assertOpen();
+
         $job = $this->plugin->jobs()->create(Job::TYPE_RESTORE, $owner, array_filter([
             'archive' => $archive,
             'paths'   => [$target],

@@ -98,6 +98,10 @@ final class UserPage
 
         if ($this->request->isPost()) {
             $this->handlePost();
+        } elseif ($this->plugin->backupWindow()->isActive()) {
+            // Said up front rather than after a click. A refused POST already
+            // says it, as its error.
+            $this->flash->warning($this->plugin->backupWindow()->message());
         }
 
         $context = array_merge($base, [
@@ -285,9 +289,10 @@ final class UserPage
 
         // DirectAdmin's own name for this directory, derived from the resolved
         // account rather than the request. The worker resolves it again from
-        // /etc/passwd and re-checks it before writing, because it runs as root
-        // into a directory the customer owns.
+        // /etc/passwd and re-checks it, and writes into it as the account.
         $backupsDir = $account->confine($account->home . '/backups');
+
+        $this->plugin->backupWindow()->assertOpen();
 
         $job = $this->plugin->jobs()->create(Job::TYPE_RESTORE, $account->username, [
             'archive'      => $archive,
@@ -335,6 +340,17 @@ final class UserPage
             throw new BorgPluginException(($running->params()['archive'] ?? '') === $archive ? 'This backup is already being prepared. It will be ready shortly.' : 'Another backup is being prepared right now. Try again when it has finished.');
         }
 
+        // Once is enough. Without this, asking again and again would keep a
+        // scan reading the repository back to back, which is the one thing
+        // here a customer could use to get in the way of the server's backup.
+        $config = $this->plugin->config()->load();
+        $index = $this->plugin->archiveIndex();
+        if ($index->exists($archive) && !$index->isStale($archive, $config->adminBackupsDir(), $config->indexFiles())) {
+            throw new BorgPluginException('This backup is already prepared.');
+        }
+
+        $this->plugin->backupWindow()->assertOpen();
+
         $job = $this->plugin->jobs()->create(Job::TYPE_INDEX, $this->request->username, [
             'archive' => $archive,
             // The administrator's setting decides this, not the customer: it
@@ -375,6 +391,8 @@ final class UserPage
         // this. Every path is confined, and the worker re-checks against the
         // same home rather than trusting what the job file says.
         $confined = array_map(static fn (string $path) => $account->confine($path), $paths);
+
+        $this->plugin->backupWindow()->assertOpen();
 
         $job = $this->plugin->jobs()->create(Job::TYPE_RESTORE, $account->username, [
             'archive' => $archive,

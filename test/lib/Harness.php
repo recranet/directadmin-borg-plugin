@@ -43,6 +43,7 @@ final class Harness
             '/backup/probe-root',
             '/backup/probe-admin',
             '/backup/symlink-repo',
+            '/backup/window-repo',
             '/home/alice/plant',
             '/etc/borg-plant',
             '/home/alice/borg_restore',
@@ -56,7 +57,13 @@ final class Harness
             $_ENV[$name] = $value;
         }
 
-        return Plugin::boot($this->pluginDir);
+        $plugin = Plugin::boot($this->pluginDir);
+
+        // The default window is the night, so a suite run at night would find
+        // every job refused. Off here; the window's own tests switch it on.
+        $plugin->config()->save(['jobs_paused_from' => '', 'jobs_paused_until' => '']);
+
+        return $plugin;
     }
 
     /** @return array<string,string> */

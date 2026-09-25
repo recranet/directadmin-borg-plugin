@@ -33,6 +33,10 @@ final class Configuration
         // directories five to one, and restoring a directory brings its files
         // back regardless of whether they were ever listed.
         'index_files' => false,
+        // The server's backup window, HH:MM in the server's timezone, when no
+        // plugin job starts. See BackupWindow. Both empty switches it off.
+        'jobs_paused_from'  => '00:00',
+        'jobs_paused_until' => '07:00',
     ];
 
     /**
@@ -106,6 +110,16 @@ final class Configuration
     public function indexFiles(): bool
     {
         return (bool) $this->get('index_files');
+    }
+
+    public function jobsPausedFrom(): string
+    {
+        return trim((string) $this->get('jobs_paused_from'));
+    }
+
+    public function jobsPausedUntil(): string
+    {
+        return trim((string) $this->get('jobs_paused_until'));
     }
 
     public function passphrase(): string
