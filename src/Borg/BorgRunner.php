@@ -264,6 +264,106 @@ final class BorgRunner
         );
     }
 
+    /**
+     * Run borg with its stdout piped straight into another process.
+     *
+     * For handing archive contents to a process that is not root: borg has to
+     * run as root to reach the repository, and the consumer must not, so the
+     * two are separate processes joined by a pipe the kernel owns. The bytes
+     * never pass through PHP, which matters when the stream is a whole home
+     * directory.
+     *
+     * proc_open rather than Symfony Process because the consumer's environment
+     * has to be exactly $consumerEnv. Process merges the parent environment
+     * into whatever it is given, and here that would put anything the worker
+     * inherited into a process the customer can inspect.
+     *
+     * The result is borg's, unless the consumer failed: then it is a failure
+     * carrying the consumer's stderr, since "tar: Cannot open: Permission
+     * denied" is the line that says what went wrong. Collected stderr keeps its
+     * last 64 KB -- with --list every restored path passes through it.
+     *
+     * @param string[]             $arguments   borg arguments
+     * @param string[]             $consumer    command line, absolute path first
+     * @param array<string,string> $consumerEnv the consumer's entire environment
+     * @param callable|null        $onOutput    receives (string $type, string $chunk)
+     */
+    public function runInto(
+        array $arguments,
+        array $consumer,
+        array $consumerEnv,
+        ?callable $onOutput = null,
+    ): BorgResult {
+        $command = array_merge([$this->binary], array_values(array_map('strval', $arguments)));
+        $commandLine = implode(' ', array_map('escapeshellarg', $command)) . ' | '
+            . implode(' ', array_map('escapeshellarg', $consumer));
+
+        $borg = proc_open($command, [0 => ['file', '/dev/null', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $borgPipes, '/', $this->environment());
+        if (!\is_resource($borg)) {
+            return new BorgResult(2, '', 'Could not start borg.', $commandLine);
+        }
+
+        $target = proc_open(array_values($consumer), [0 => $borgPipes[1], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $targetPipes, '/', $consumerEnv);
+
+        // The consumer holds the read end now. Keeping a copy here would mean
+        // borg never sees the pipe close if the consumer dies, and blocks.
+        fclose($borgPipes[1]);
+
+        if (!\is_resource($target)) {
+            fclose($borgPipes[2]);
+            proc_terminate($borg);
+            proc_close($borg);
+
+            return new BorgResult(2, '', 'Could not start ' . basename($consumer[0] ?? 'the restore') . '.', $commandLine);
+        }
+
+        $streams = ['borg' => $borgPipes[2], 'out' => $targetPipes[1], 'err' => $targetPipes[2]];
+        $collected = ['borg' => '', 'out' => '', 'err' => ''];
+        foreach ($streams as $stream) {
+            stream_set_blocking($stream, false);
+        }
+
+        while ($streams !== []) {
+            $read = array_values($streams);
+            $write = $except = null;
+            if (@stream_select($read, $write, $except, 1) === false) {
+                break;
+            }
+
+            foreach ($streams as $key => $stream) {
+                if (!\in_array($stream, $read, true)) {
+                    continue;
+                }
+
+                $chunk = fread($stream, 65536);
+                if ($chunk === false || ($chunk === '' && feof($stream))) {
+                    fclose($stream);
+                    unset($streams[$key]);
+                    continue;
+                }
+
+                $collected[$key] = substr($collected[$key] . $chunk, -65536);
+                if ($onOutput !== null && $chunk !== '') {
+                    $onOutput($key === 'out' ? 'out' : 'err', $chunk);
+                }
+            }
+        }
+
+        $borgExit = proc_close($borg);
+        $targetExit = proc_close($target);
+
+        if ($targetExit !== 0) {
+            return new BorgResult(
+                2,
+                '',
+                trim($collected['err'] . "\n" . $collected['borg']) ?: \sprintf('%s exited with code %d.', basename($consumer[0] ?? 'the restore'), $targetExit),
+                $commandLine
+            );
+        }
+
+        return new BorgResult($borgExit, '', $collected['borg'], $commandLine);
+    }
+
     /** @return array<string,string> */
     private function environment(): array
     {

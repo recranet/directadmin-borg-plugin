@@ -24,6 +24,7 @@ use Recranet\DirectAdminBorg\Job\AccountTreeRestore;
 use Recranet\DirectAdminBorg\Job\Job;
 use Recranet\DirectAdminBorg\Job\JobRunner;
 use Recranet\DirectAdminBorg\Security\Account;
+use Recranet\DirectAdminBorg\Security\AccountFilesystem;
 use Recranet\DirectAdminBorg\Security\CsrfTokenizer;
 use Recranet\DirectAdminBorg\Security\PathGuard;
 use Recranet\DirectAdminBorg\Support\Format;
@@ -1146,9 +1147,10 @@ $t->is((int) stat($delivered)['uid'], $aliceUid, 'the tarball belongs to the acc
 $t->is(substr(sprintf('%o', stat($delivered)['mode']), -4), '0600', 'and only they can read it');
 $t->is((int) stat('/home/alice/backups')['uid'], $aliceUid, 'so does the directory the plugin had to create');
 
-// Staging happens inside that same directory, so none of it may be left behind
-// to count against the customer's quota or to look like something restorable.
-$t->is(glob('/home/alice/backups/.borg-incoming-*') ?: [], [], 'the staging directory is cleaned up');
+// The file is written under a hidden name in that same directory first, so
+// none of it may be left behind to count against the customer's quota or to
+// look like something restorable.
+$t->is(glob('/home/alice/backups/.borg-incoming-*') ?: [], [], 'nothing is left under the incoming name');
 
 // Doing it twice is ordinary: a second go at the same restore.
 @file_put_contents($delivered, 'stale');
@@ -1226,6 +1228,45 @@ $t->is(
     Job::STATUS_FAILED,
     'a delivery carrying more than one path is refused'
 );
+
+// Past the directory check, everything happens by name inside a directory the
+// customer owns, and the incoming name is predictable: it carries the job id,
+// which the page shows. The customer can have a link waiting there, or at the
+// final name. As root, the write, the chmod and the chown all followed one.
+$deliveryJob = static fn () => $plugin->jobs()->create(Job::TYPE_RESTORE, 'alice', [
+    'archive'      => $archive,
+    'paths'        => ['/home/admin/admin_backups/user.admin.alice.tar.zst'],
+    'destination'  => '/home/alice/backups',
+    'restore_user' => 'alice',
+    'deliver_to'   => '/home/alice/backups',
+]);
+
+$plugin->filesystem()->remove(['/home/alice/backups', '/etc/borg-plant']);
+$plugin->filesystem()->mkdir('/home/alice/backups', 0750);
+$plugin->filesystem()->chown('/home/alice/backups', 'alice');
+$plugin->filesystem()->mkdir('/etc/borg-plant', 0755);
+file_put_contents('/etc/borg-plant/shadow', 'root only');
+chmod('/etc/borg-plant/shadow', 0640);
+
+// A link to a directory: the old worker took it for the staging directory it
+// was about to create, and extracted into /etc as root.
+$waiting = $deliveryJob();
+symlink('/etc/borg-plant', '/home/alice/backups/.borg-incoming-' . $waiting->id);
+$runJob($waiting);
+$t->is($plugin->jobs()->find($waiting->id)->status(), Job::STATUS_FAILED, 'a link waiting at the incoming name fails the delivery');
+$t->is(glob('/etc/borg-plant/*') ?: [], ['/etc/borg-plant/shadow'], 'nothing is written into the directory behind it');
+$t->is((int) stat('/etc/borg-plant')['uid'], 0, 'which is not handed to the account');
+$t->notOk(is_link('/home/alice/backups/.borg-incoming-' . $waiting->id), 'and the link is cleared away');
+
+symlink('/etc/borg-plant/shadow', '/home/alice/backups/user.admin.alice.tar.zst');
+$atTarget = $deliveryJob();
+$runJob($atTarget);
+$t->is($plugin->jobs()->find($atTarget->id)->status(), Job::STATUS_SUCCESS, 'a link at the final name is replaced: ' . $plugin->jobs()->find($atTarget->id)->message());
+$t->ok(!is_link('/home/alice/backups/user.admin.alice.tar.zst') && is_file('/home/alice/backups/user.admin.alice.tar.zst'), 'by the delivered file itself');
+$t->is((string) file_get_contents('/etc/borg-plant/shadow'), 'root only', 'and what it pointed at is untouched');
+$t->is((int) stat('/etc/borg-plant/shadow')['uid'], 0, 'still owned by root');
+$t->is(substr(sprintf('%o', stat('/etc/borg-plant/shadow')['mode']), -4), '0640', 'with its mode unchanged');
+$plugin->filesystem()->remove('/etc/borg-plant');
 
 $plugin->filesystem()->remove('/home/alice/backups');
 
@@ -1331,6 +1372,11 @@ $siteDir = '/home/alice/domains/example.com';
 @mkdir($siteDir . '/repo/wp-content', 0755, true);
 @file_put_contents($siteDir . '/repo/shell.php', '<?php /* webshell */');
 @file_put_contents($siteDir . '/repo/index.php', 'clean');
+// Owned by the account, as a deploy the customer ran would leave it. The
+// pre-clean deletes as the account, so a root-owned tree here is one it could
+// not remove -- and a real home does not have one.
+$plugin->filesystem()->chown($siteDir . '/repo', 'alice', true);
+$plugin->filesystem()->chgrp($siteDir . '/repo', 'alice', true);
 $plugin->filesystem()->remove($siteDir . '/public_html');
 @symlink($siteDir . '/repo', $siteDir . '/public_html');
 $t->ok(is_link($siteDir . '/public_html'), 'public_html is a symlink into the repo checkout, as on a real deploy');
@@ -1346,7 +1392,7 @@ $t->contains($out, '/home/alice/domains', 'the message names exactly what is del
 
 $cleanJob = $plugin->jobs()->recent(1)[0];
 $t->is($cleanJob->params()['clean_paths'], ['/home/alice/domains'], 'the job records the directory to delete');
-$t->ok($t->waitForJob($plugin, $cleanJob->id, 180)?->status() === Job::STATUS_SUCCESS, 'the clean restore completes');
+$t->ok($t->waitForJob($plugin, $cleanJob->id, 180)?->status() === Job::STATUS_SUCCESS, 'the clean restore completes: ' . $plugin->jobs()->find($cleanJob->id)?->message());
 
 $t->notOk(is_file($siteDir . '/repo/shell.php'), 'the webshell is gone: deleting the domains directory reaches the symlink target too');
 $t->notOk(is_dir($siteDir . '/repo'), 'the repository checkout beside public_html is gone');
@@ -1358,6 +1404,8 @@ $t->group('Pre-clean never follows a symlink out of the home');
 // The dangerous case: a symlink inside the deleted tree pointing outside it.
 // Removing the link must not touch what it points at.
 @mkdir('/home/alice/domains/evil.com', 0755, true);
+$plugin->filesystem()->chown('/home/alice/domains/evil.com', 'alice');
+$plugin->filesystem()->chgrp('/home/alice/domains/evil.com', 'alice');
 @symlink('/etc', '/home/alice/domains/evil.com/escape');
 @file_put_contents('/etc/borg-canary.txt', 'must survive');
 $t->ok(is_link('/home/alice/domains/evil.com/escape'), 'a symlink to /etc exists inside the tree to be deleted');
@@ -1428,6 +1476,106 @@ $out = $t->page('admin', 'admin', ['tab' => 'archives', 'archive' => $archive], 
     'csrf_token'  => (new CsrfTokenizer($plugin->paths, $plugin->filesystem()))->token(PluginRequest::LEVEL_ADMIN, 'admin'),
 ], 'POST');
 $t->contains($out, 'Refusing to restore directly into', 'the free-form restore still cannot target / in place');
+
+$t->group('An in-place restore never writes through a symlink the customer planted');
+
+// The attack in full. A file of the customer's choosing gets into a backup,
+// the directory above it is then swapped for a link to somewhere only root may
+// write, and the file is restored "in place". borg 1.1 and 1.2 extract straight
+// through a symlinked parent, so while root did the extracting this put the
+// customer's file into /etc. Every check on the path was lexical and passed.
+$aliceAccount = Account::resolve('alice', $plugin->paths);
+$plantRepo = '/backup/symlink-repo';
+$plugin->filesystem()->remove([$plantRepo, '/home/alice/plant', '/etc/borg-plant']);
+
+$plugin->filesystem()->mkdir('/home/alice/plant', 0755);
+file_put_contents('/home/alice/plant/planted.conf', 'chosen by the customer');
+$plugin->filesystem()->chown('/home/alice/plant', 'alice', true);
+$plugin->filesystem()->chgrp('/home/alice/plant', 'alice', true);
+
+// Its own repository, so the archive counts the rest of the suite relies on
+// are not disturbed.
+$t->ok($externalInit($plantRepo)->isSuccessful(), 'the external backup creates a repository for this');
+$plantCreated = $externalArchive($plantRepo, 'plant-1', ['/home/alice/plant']);
+$t->ok($plantCreated->isSuccessful(), 'and backs up the file the customer chose');
+$plugin->config()->save(['repository' => $plantRepo]);
+
+$plugin->filesystem()->remove('/home/alice/plant');
+$plugin->filesystem()->mkdir('/etc/borg-plant', 0755);
+symlink('/etc/borg-plant', '/home/alice/plant');
+$t->ok(is_link('/home/alice/plant'), 'the directory above the file is now a link to a root-only directory');
+
+$plantRestore = static function (string $owner, array $scope, array $extra = []) use ($plugin, $runJob): Job {
+    $job = $plugin->jobs()->create(Job::TYPE_RESTORE, $owner, array_merge([
+        'archive'     => 'plant-1',
+        'paths'       => ['/home/alice/plant/planted.conf'],
+        'destination' => '/',
+        'in_place'    => true,
+    ], $scope, $extra));
+    $runJob($job);
+
+    return $plugin->jobs()->find($job->id);
+};
+
+// Both shapes a job file can take: the customer's own, and an administrator's
+// restore of the account, which names it differently.
+foreach (['a customer restore' => ['alice', ['confine_to' => 'alice']], 'an administrator restore of the account' => ['admin', ['restore_user' => 'alice']]] as $who => [$owner, $scope]) {
+    $planted = $plantRestore($owner, $scope);
+    $t->is($planted->status(), Job::STATUS_FAILED, $who . ' fails rather than follow the link: ' . $planted->message());
+    $t->contains($planted->message(), 'home/alice/plant/planted.conf', 'the failure names the path that was refused');
+    $t->notOk(file_exists('/etc/borg-plant/planted.conf'), 'and nothing lands in the directory the link points at');
+}
+
+// Not a restore that no longer works: without the link it goes through, and
+// the file comes back belonging to the account that wrote it.
+unlink('/home/alice/plant');
+$honest = $plantRestore('alice', ['confine_to' => 'alice']);
+$t->is($honest->status(), Job::STATUS_SUCCESS, 'with the link gone the same restore succeeds: ' . $honest->message());
+$t->is(trim((string) @file_get_contents('/home/alice/plant/planted.conf')), 'chosen by the customer', 'the file is back where it was');
+$t->is((int) stat('/home/alice/plant/planted.conf')['uid'], $aliceAccount->uid, 'owned by the account');
+
+$t->group('A pre-clean never deletes through a symlink the customer planted');
+
+// The same trick against the deletion. A clean path whose parent is a link:
+// as root, this removed the file the link led to. Deleting as the account, it
+// is refused. Racing a swap mid-walk comes to the same thing, since the
+// account is the one deleting at every step of it.
+$plugin->filesystem()->remove('/home/alice/plant');
+$plugin->filesystem()->mkdir('/etc/borg-plant/victim', 0755);
+file_put_contents('/etc/borg-plant/victim/keep.conf', 'root only');
+symlink('/etc/borg-plant', '/home/alice/plant');
+
+$cleaned = $plantRestore('admin', ['restore_user' => 'alice'], [
+    'clean_paths' => ['/home/alice/plant/victim'],
+    // What the admin page puts beside it, and all the old worker bounded the
+    // deletion by.
+    'clean_root' => '/home/alice',
+]);
+$t->is($cleaned->status(), Job::STATUS_FAILED, 'the restore fails rather than delete through the link');
+$t->ok(is_file('/etc/borg-plant/victim/keep.conf'), 'the file behind the link is still there');
+
+$t->group('Writing as the account means only the account');
+
+$aliceWriter = new AccountFilesystem($aliceAccount);
+$asAlice = static function (array $command) use ($aliceWriter): string {
+    $process = proc_open($aliceWriter->command($command), [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, '/', $aliceWriter->environment());
+    $output = trim((string) stream_get_contents($pipes[1]));
+    proc_close($process);
+
+    return $output;
+};
+
+$t->is($asAlice(['/usr/bin/id', '-u']), (string) $aliceAccount->uid, 'the command runs under the account uid');
+$t->is($asAlice(['/usr/bin/id', '-G']), (string) $aliceAccount->gid, 'with its own group and no supplementary ones');
+
+// The account can read its own process environment, and borg on the other end
+// of the pipe holds the passphrase in its.
+putenv('BORG_PASSPHRASE=must-not-reach-the-account');
+$t->notContains($asAlice(['/usr/bin/env']), 'must-not-reach-the-account', 'nothing from the worker environment is passed on');
+putenv('BORG_PASSPHRASE');
+
+$plugin->filesystem()->remove(['/home/alice/plant', '/etc/borg-plant', $plantRepo]);
+$plugin->config()->save(['repository' => '/backup/test-repo']);
 
 $t->group('Restore-a-user guards');
 

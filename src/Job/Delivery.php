@@ -13,12 +13,12 @@ use Recranet\DirectAdminBorg\Security\Account;
  * backups under /home/admin/admin_backups, and the User Level restore screen
  * only reads /home/<user>/backups.
  *
- * borg could be pointed straight there -- extract takes --strip-components --
- * but the file is staged and moved instead, because a rename within one
- * filesystem is atomic and an extract is not. DirectAdmin offers whatever is in
- * that directory as something to restore from, so a tarball growing in it for
- * the length of an extract, or a truncated one left behind by a job that died
- * halfway, is a backup somebody can pick.
+ * The file is written under a hidden name and renamed into place, because a
+ * rename is atomic and a write is not. DirectAdmin offers whatever is in that
+ * directory as something to restore from, so a tarball growing in it for the
+ * length of an extract, or a truncated one left behind by a job that died
+ * halfway, is a backup somebody can pick. Both the write and the rename are
+ * done as the account; see AccountFilesystem.
  *
  * Carried as a resolved object rather than as strings so the worker cannot act
  * on a directory it has not checked: every field here has already been

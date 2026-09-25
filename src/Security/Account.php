@@ -6,8 +6,6 @@ namespace Recranet\DirectAdminBorg\Security;
 
 use Recranet\DirectAdminBorg\Exception\BorgPluginException;
 use Recranet\DirectAdminBorg\Paths;
-use Symfony\Component\Filesystem\Filesystem;
-use Symfony\Component\Finder\Finder;
 
 /**
  * A DirectAdmin/UNIX account and the boundary of what it may restore.
@@ -119,35 +117,5 @@ final class Account
     public function confine(string $path): string
     {
         return PathGuard::confine($path, $this->home);
-    }
-
-    /**
-     * Hand a restored tree back to the account.
-     *
-     * Extraction runs as root, so without this the user would be left with
-     * root-owned files inside their own home directory. Finder walks the tree;
-     * Filesystem applies ownership, following no symlinks of its own.
-     */
-    public function takeOwnership(string $path, Filesystem $filesystem): void
-    {
-        if (!file_exists($path)) {
-            return;
-        }
-
-        // Only ever touch a path that is already inside this account's home.
-        $this->confine($path);
-
-        $filesystem->chown($path, $this->uid, false);
-        $filesystem->chgrp($path, $this->gid, false);
-
-        if (!is_dir($path) || is_link($path)) {
-            return;
-        }
-
-        $finder = (new Finder())->in($path)->ignoreDotFiles(false)->ignoreVCS(false);
-        foreach ($finder as $item) {
-            $filesystem->chown($item->getPathname(), $this->uid, false);
-            $filesystem->chgrp($item->getPathname(), $this->gid, false);
-        }
     }
 }

@@ -42,9 +42,20 @@ arriving in a request is confined twice: once in the page, and again in the
 worker at the point of use, re-derived from the job file rather than trusted.
 `src/Security/PathGuard.php` is lexical on purpose — it never touches the
 filesystem, because the same rules apply to paths that only exist inside an
-archive. It therefore cannot see a symlink; anywhere the worker writes into a
-directory a customer owns, resolve the path and check it again
-(`JobRunner::prepareDelivery()` is the worked example).
+archive. It therefore cannot see a symlink.
+
+**Root never writes, deletes, chmods or chowns inside a customer's home.**
+Everything that has to goes through `src/Security/AccountFilesystem.php`,
+which runs the operation as the account (`setpriv`, no supplementary groups,
+an exact environment). Checking the path first does not hold: the customer
+owns every directory below their home and can swap one for a symlink between
+the check and the write, and PHP has no `openat`/`O_NOFOLLOW` to do it safely
+as root. Symfony's Filesystem is no help here — it is `is_link()` then an
+operation on the same path string. borg 1.1 and 1.2 extract straight through a
+symlinked parent, so restores into a home are `borg export-tar` or
+`extract --stdout` piped into a process running as the account
+(`BorgRunner::runInto()`). A `realpath()` or `is_link()` check near a write is
+an early refusal with a clear message, never the guard.
 
 ## Conventions
 

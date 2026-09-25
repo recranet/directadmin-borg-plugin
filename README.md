@@ -55,6 +55,14 @@ from a request is normalised and confined to the requesting account's home
 twice — once in the page, and again in the worker at the point of use
 (`src/Security/PathGuard.php`, `src/Security/Account.php`).
 
+Root reads the repository; it does not write into a customer's home. Every
+restore, delete and delivery there is done as the account itself
+(`src/Security/AccountFilesystem.php`): borg streams the files out as root and
+a process running as the customer writes them. A customer owns every directory
+in their home and can replace any of them with a symlink at any moment, so a
+check on the path before root writes cannot hold; running as the customer means
+the kernel applies their own permissions at every step instead.
+
 ---
 
 ## Requirements
@@ -325,10 +333,11 @@ come back; what the page warns about is that a mail client may re-download
 afterwards. Whether dovecot's indexes want rebuilding is not something this
 plugin decides — it does not touch them.
 
-Ownership is deliberately not touched for an in-place restore. An extract run as
-root puts back the ownership recorded in the archive, which is already correct,
-and the alternative would mean chowning the destination — which for an in-place
-restore is `/`.
+Restored files belong to the account, because the account is what writes them.
+That also means they come back with its own group: a file in the home that was
+owned by a group the account is not in — `mail` under `imap/`, say — comes back
+in the account's group instead. Mail delivery and dovecot go by the owner, so
+this does not stop mail working. ACLs and extended attributes are not restored.
 
 Turn the whole user-level feature off with **Repository → Let users restore
 their own files**.
@@ -354,7 +363,10 @@ their only option is an overlay that leaves the attacker's file in place is
 telling them to open a ticket. The deletion is bounded by the account's own home
 in the page, again in `AccountTreeRestore::queue()`, and again in the worker
 before anything is removed; the home directory itself can never be the thing
-emptied, and a symlink out of the tree is removed rather than followed.
+emptied, and a symlink out of the tree is removed rather than followed. The
+deletion runs as the account, so it can remove exactly what the customer could
+remove themselves — a tree holding something they cannot delete fails the
+restore rather than being cleared as root.
 
 Delete the whole `domains/example.com`, not just `public_html`. Where
 `public_html` is a symlink into a repository checkout beside it, removing the
@@ -404,21 +416,17 @@ Two things it does not do, both stated on the page:
 - **It does not create the account.** For a user DirectAdmin no longer has,
   follow the sequence below instead.
 
-Under the hood this is the only restore that does not leave files where borg put
-them: the job extracts into a staging directory beside the target, moves the one
-file into place, hands it to the account, and removes the staging directory
-whatever happened. borg could write it there directly — `extract` takes
-`--strip-components` — so the staging step is not about getting the path right.
-It is about the file appearing at its final name complete or not at all.
-DirectAdmin offers whatever is in `/home/<user>/backups` as something to restore
-from, and an extract is not atomic: written in place, the tarball would sit
-there growing for the length of the run, and a job that died halfway would leave
-a truncated one under exactly the name a good one has. A rename within one
-filesystem has neither problem. The delivery directory is resolved and
-re-checked against the account's real home in the worker, and a symlink where
-`/home/<user>/backups` should be is refused rather than followed — the customer
-owns that directory, the worker writes there as root, and `PathGuard` is lexical
-by design.
+Under the hood borg streams the one file out of the archive, and the account
+writes it under a hidden name in `/home/<user>/backups`, sets it to `0600` and
+renames it into place. The rename is about the file appearing at its final name
+complete or not at all. DirectAdmin offers whatever is in that directory as
+something to restore from, and a write is not atomic: written at its final name,
+the tarball would sit there growing for the length of the run, and a job that
+died halfway would leave a truncated one under exactly the name a good one has.
+A symlink where `/home/<user>/backups` should be is refused up front with a
+message saying so, but that check is not what makes this safe — every write,
+the mode and the rename are done as the account, so a link planted at any of
+those names reaches nothing the customer could not reach themselves.
 
 Turn the whole thing off with **Repository → Use DirectAdmin's own per-user
 backups**, which also drops the tarball from a whole-account restore.

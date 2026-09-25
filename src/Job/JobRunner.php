@@ -11,8 +11,8 @@ use Recranet\DirectAdminBorg\Exception\BorgPluginException;
 use Recranet\DirectAdminBorg\Exception\UnsafePathException;
 use Recranet\DirectAdminBorg\Plugin;
 use Recranet\DirectAdminBorg\Security\Account;
+use Recranet\DirectAdminBorg\Security\AccountFilesystem;
 use Recranet\DirectAdminBorg\Security\PathGuard;
-use Symfony\Component\Filesystem\Filesystem;
 use Symfony\Component\Lock\LockInterface;
 
 /**
@@ -168,7 +168,6 @@ final class JobRunner
         $archive = (string) ($params['archive'] ?? '');
         $paths = array_values(array_filter(array_map('strval', (array) ($params['paths'] ?? []))));
         $destination = (string) ($params['destination'] ?? '');
-        $owner = (string) ($params['chown_to'] ?? '');
 
         if ($archive === '' || $paths === [] || $destination === '') {
             return $this->finish($job, Job::STATUS_FAILED, 2, 'Restore job is missing a backup, paths or destination.');
@@ -179,7 +178,7 @@ final class JobRunner
         // Whose home bounds this restore. Normally the account that owns the
         // files; chown_to is the older spelling and still honoured, because it
         // is what a job queued by a previous version carries.
-        $confineTo = (string) ($params['confine_to'] ?? '') ?: $owner;
+        $confineTo = (string) ($params['confine_to'] ?? '') ?: (string) ($params['chown_to'] ?? '');
 
         // Re-validate rather than trusting the job file. The worker runs as
         // root and the job file is its only input, so the confinement check
@@ -204,7 +203,35 @@ final class JobRunner
             $destination = PathGuard::normalize($destination);
         }
 
-        $filesystem = $this->plugin->filesystem();
+        // Resolved before a byte is written: a delivery that names a directory
+        // this job may not write to should fail now, not after ten minutes of
+        // extracting.
+        $delivery = $this->resolveDelivery($params, $paths, $inPlace);
+        if ($delivery !== null) {
+            if ((array) ($params['clean_paths'] ?? []) !== []) {
+                return $this->finish($job, Job::STATUS_FAILED, 2, 'A delivered restore copies one file and deletes nothing.');
+            }
+
+            return $this->runDelivery($job, $repository, $archive, $paths[0], $delivery);
+        }
+
+        // Whose home this restore writes into, and so who does the writing. A
+        // user-level job names the account in confine_to; an admin
+        // restore-a-user names it in restore_user. Resolved lazily: restoring
+        // only a deleted account's DirectAdmin tarball names a user who no
+        // longer has a home, and needs none.
+        $homeAccount = $account;
+        $homeAccountName = $confineTo ?: trim((string) ($params['restore_user'] ?? ''));
+        $resolveHomeAccount = function () use (&$homeAccount, $homeAccountName): Account {
+            if ($homeAccount === null) {
+                if ($homeAccountName === '') {
+                    throw new UnsafePathException('A restore into a home directory must name the account it belongs to.');
+                }
+                $homeAccount = Account::resolve($homeAccountName, $this->plugin->paths);
+            }
+
+            return $homeAccount;
+        };
 
         // Optional pre-clean. A restore is an overlay: borg cannot delete during
         // an extract, so anything the archive does not contain survives it. That
@@ -212,22 +239,19 @@ final class JobRunner
         // attacker added must not come back.
         $cleanTargets = (array) ($params['clean_paths'] ?? []);
 
-        // The root every deletion must sit inside. A user-level restore carries
-        // the account it belongs to; an admin restore-a-user names the home
-        // explicitly, because it deliberately does not set chown_to (borg
-        // restores the archived ownership instead).
-        $cleanRoot = $account !== null
-            ? $account->home
-            : trim((string) ($params['clean_root'] ?? ''));
-
-        if ($cleanTargets !== [] && $cleanRoot === '') {
-            return $this->finish($job, Job::STATUS_FAILED, 2, 'Restore job asks to delete files but names no root to confine that to.');
+        if ($cleanTargets !== [] && $homeAccountName === '') {
+            return $this->finish($job, Job::STATUS_FAILED, 2, 'Restore job asks to delete files but names no account to confine that to.');
         }
 
         foreach ($cleanTargets as $cleanPath) {
+            // The root every deletion must sit inside is the account's real
+            // home, read from /etc/passwd -- not clean_root from the job file,
+            // which only ever held the same value.
+            $cleanAccount = $resolveHomeAccount();
+
             // Re-validated here, not trusted from the job file: this deletes
-            // recursively as root.
-            $cleanPath = $this->assertCleanable((string) $cleanPath, PathGuard::normalize($cleanRoot));
+            // recursively.
+            $cleanPath = $this->assertCleanable((string) $cleanPath, $cleanAccount->home);
 
             if (!file_exists($cleanPath) && !is_link($cleanPath)) {
                 $this->log($job, 'Nothing to remove at ' . $cleanPath . '.');
@@ -235,96 +259,175 @@ final class JobRunner
             }
 
             $this->log($job, 'Removing ' . $cleanPath . ' before restoring.');
-            $filesystem->remove($cleanPath);
+            (new AccountFilesystem($cleanAccount))->remove($cleanPath);
 
             if (file_exists($cleanPath) || is_link($cleanPath)) {
                 return $this->finish($job, Job::STATUS_FAILED, 1, 'Could not remove ' . $cleanPath . ' before restoring.');
             }
         }
 
-        // Resolved before a byte is written: a delivery that names a directory
-        // this job may not write to should fail now, not after ten minutes of
-        // extracting.
-        $delivery = $this->resolveDelivery($params, $paths, $inPlace);
+        // Which paths are written by the account and which by root.
+        //
+        // Everything that lands inside a home is written by its account: that
+        // tree is theirs to rearrange, so root must never be the one writing
+        // into it. A user-level job is only ever that, in place or into a
+        // directory of their own. An admin restore-a-user in place may also
+        // carry the account's DirectAdmin tarball, which goes back into the
+        // backups directory the administrator owns, and an admin restore into
+        // a staging directory writes wherever the administrator chose. Only
+        // those are still written as root. An in-place path in neither the
+        // home nor the backups directory is refused here rather than trusting
+        // that the page checked.
+        $rootPaths = [];
+        $accountPaths = [];
+        if ($inPlace) {
+            $adminBackupsDir = $config->adminBackupsDir();
 
-        $staging = null;
-        if ($delivery !== null) {
-            $delivery = $this->prepareDelivery($delivery, $filesystem);
+            foreach ($paths as $path) {
+                $path = PathGuard::normalize($path);
 
-            // Extracted beside the target rather than into it. DirectAdmin's
-            // restore screen lists whatever is in that directory, and a
-            // half-written tarball offered as something to restore from is
-            // worse than one that is not there yet.
-            $staging = $delivery->directory . '/.borg-incoming-' . $job->id;
-            $destination = $staging;
+                if ($account === null && $adminBackupsDir !== '' && PathGuard::isWithin($path, $adminBackupsDir)) {
+                    $rootPaths[] = $path;
+                } elseif ($homeAccountName !== '' && PathGuard::isWithin($path, $resolveHomeAccount()->home)) {
+                    $accountPaths[] = $path;
+                } else {
+                    return $this->finish($job, Job::STATUS_FAILED, 2, \sprintf(
+                        'Refusing to restore %s in place: it is outside the account\'s home and the DirectAdmin backups directory.',
+                        $path
+                    ));
+                }
+            }
+        } elseif ($account !== null) {
+            // The destination was confined to the home above.
+            $accountPaths = $paths;
+        } else {
+            $rootPaths = $paths;
         }
 
-        $filesystem->mkdir($destination, 0750);
+        $result = null;
 
-        if (!is_dir($destination)) {
-            return $this->finish($job, Job::STATUS_FAILED, 1, 'Unable to create the destination directory: ' . $destination);
-        }
+        if ($accountPaths !== []) {
+            $writer = new AccountFilesystem($resolveHomeAccount());
 
-        $this->log($job, \sprintf('Extracting %d path(s) from %s into %s.', \count($paths), $archive, $destination));
+            if (!$inPlace) {
+                $writer->mkdir($destination, 0750);
+            }
 
-        try {
-            $result = $repository->runner()->run(
-                $repository->extractArguments($archive, $paths),
-                BorgRunner::NO_TIMEOUT,
+            $this->log($job, \sprintf(
+                'Extracting %d path(s) from %s into %s, written as %s.',
+                \count($accountPaths),
+                $archive,
+                $inPlace ? $writer->account->home : $destination,
+                $writer->account->username
+            ));
+
+            $result = $repository->runner()->runInto(
+                $repository->exportTarArguments($archive, $accountPaths),
+                $writer->untarCommand($destination),
+                $writer->environment(),
                 $this->sink($job),
-                $destination,
             );
 
             if (!$result->isSuccessful()) {
                 return $this->finish($job, Job::STATUS_FAILED, $result->exitCode, 'Restore failed: ' . $result->errorMessage());
             }
-
-            if ($delivery !== null) {
-                $this->deliver($job, $delivery, $destination, $paths[0], $filesystem);
-            }
-        } finally {
-            // However this ends, the staging directory does not stay behind in
-            // a customer's home directory counting against their quota.
-            if ($staging !== null) {
-                $filesystem->remove($staging);
-            }
         }
 
-        // Ownership. Only for a staged restore, and never in place: an extract
-        // run as root already puts back the ownership recorded in the archive,
-        // which is the correct one. Chowning in place would mean chowning the
-        // destination -- which is "/" -- and handing the entire filesystem to
-        // a customer. The destination is checked again here rather than relying
-        // on the branch above having got it right.
-        // A delivery is excluded as well: its destination is the staging
-        // directory, which by now has been removed, and the file it produced
-        // was handed to the account by deliver() already.
-        if ($account !== null && $owner !== '' && !$inPlace && $delivery === null) {
-            if ($destination === '/' || !PathGuard::isWithin($destination, $account->home)) {
-                return $this->finish($job, Job::STATUS_FAILED, 2, \sprintf(
-                    'Refusing to change ownership of %s: it is outside %s.',
-                    $destination,
-                    $account->home
-                ));
+        if ($rootPaths !== []) {
+            $this->plugin->filesystem()->mkdir($destination, 0750);
+
+            if (!is_dir($destination)) {
+                return $this->finish($job, Job::STATUS_FAILED, 1, 'Unable to create the destination directory: ' . $destination);
             }
 
-            // Extraction ran as root, so hand the files back before the user
-            // ever sees them.
-            $this->log($job, 'Restoring ownership to ' . $account->username . '.');
-            $account->takeOwnership($destination, $filesystem);
+            $this->log($job, \sprintf('Extracting %d path(s) from %s into %s.', \count($rootPaths), $archive, $destination));
+
+            $rootResult = $repository->runner()->run(
+                $repository->extractArguments($archive, $rootPaths),
+                BorgRunner::NO_TIMEOUT,
+                $this->sink($job),
+                $destination,
+            );
+
+            if (!$rootResult->isSuccessful()) {
+                return $this->finish($job, Job::STATUS_FAILED, $rootResult->exitCode, 'Restore failed: ' . $rootResult->errorMessage());
+            }
+
+            // A warning from either half is a warning for the job.
+            $result = $result !== null && $result->isWarning() ? $result : $rootResult;
         }
 
-        if ($delivery !== null) {
-            $message = 'Delivered ' . $delivery->filename . ' to ' . $delivery->directory . '.';
-        } else {
-            $message = $inPlace ? 'Restored in place.' : 'Restored into ' . $destination;
+        if ($result === null) {
+            return $this->finish($job, Job::STATUS_FAILED, 2, 'Restore job has no paths to extract.');
         }
 
         return $this->finish(
             $job,
             $result->isWarning() ? Job::STATUS_WARNING : Job::STATUS_SUCCESS,
             $result->exitCode,
-            $message
+            $inPlace ? 'Restored in place.' : 'Restored into ' . $destination
+        );
+    }
+
+    /**
+     * Put one archived file into an account's directory, under its own name.
+     *
+     * borg streams the file to stdout as root and the account writes it, under
+     * a name DirectAdmin will not offer, then renames it into place. The
+     * rename is what makes the file appear complete or not at all: DirectAdmin
+     * lists that directory as backups to restore from, and a tarball growing
+     * there for the length of the run, or a truncated one left by a job that
+     * died, would be something a customer can pick. The account also sets the
+     * mode, and nothing needs a chown, because the account created the file.
+     */
+    private function runDelivery(Job $job, Repository $repository, string $archive, string $path, Delivery $delivery): int
+    {
+        $delivery = $this->prepareDelivery($delivery);
+        $writer = new AccountFilesystem($delivery->account);
+        $incoming = $delivery->directory . '/.borg-incoming-' . $job->id;
+
+        $this->log($job, \sprintf('Extracting %s from %s, written as %s.', $path, $archive, $delivery->account->username));
+
+        try {
+            $result = $repository->runner()->runInto(
+                $repository->extractToStdoutArguments($archive, $path),
+                $writer->writeCommand($incoming),
+                $writer->environment(),
+                $this->sink($job),
+            );
+
+            if (!$result->isSuccessful()) {
+                return $this->finish($job, Job::STATUS_FAILED, $result->exitCode, 'Restore failed: ' . $result->errorMessage());
+            }
+
+            // The tarball holds one customer's databases and configuration,
+            // and it sits in a directory they can reach.
+            $writer->chmod($incoming, 0600);
+
+            if (file_exists($delivery->target()) || is_link($delivery->target())) {
+                $this->log($job, 'Replacing the existing ' . $delivery->target() . '.');
+            }
+            $writer->rename($incoming, $delivery->target());
+        } finally {
+            // Only still there if something above failed. It is not left behind
+            // counting against the customer's quota.
+            if (file_exists($incoming) || is_link($incoming)) {
+                $writer->remove($incoming);
+            }
+        }
+
+        $this->log($job, \sprintf(
+            'Delivered %s to %s, owned by %s.',
+            $delivery->filename,
+            $delivery->directory,
+            $delivery->account->username
+        ));
+
+        return $this->finish(
+            $job,
+            $result->isWarning() ? Job::STATUS_WARNING : Job::STATUS_SUCCESS,
+            $result->exitCode,
+            'Delivered ' . $delivery->filename . ' to ' . $delivery->directory . '.'
         );
     }
 
@@ -337,14 +440,8 @@ final class JobRunner
      * User Level restore screen reads, and that screen is the thing that
      * actually knows how to import databases.
      *
-     * It is staged and moved rather than extracted straight there -- borg would
-     * do that with --strip-components -- because a rename is atomic where an
-     * extract is not, and DirectAdmin lists that directory as backups to
-     * restore from. See Delivery.
-     *
      * Re-derived from the job file rather than trusted, like every other path
-     * this worker acts on: it runs as root and is about to write inside a
-     * customer's home directory.
+     * this worker acts on.
      *
      * @param array<string,mixed> $params
      * @param string[]            $paths
@@ -386,15 +483,15 @@ final class JobRunner
     }
 
     /**
-     * The delivery directory, created if it is not there, owned by the account.
+     * The delivery directory, created as the account if it is not there.
      *
-     * A symlink is refused rather than followed. PathGuard is lexical by
-     * design -- it cannot see that /home/alice/backups is a link to /etc -- and
-     * a customer owns their own home, so the check that the directory really is
-     * inside that home is made again against its resolved path. Without this,
-     * a link planted by the customer would decide where root writes.
+     * The symlink and realpath checks are early refusals, not the guard: the
+     * writing is done as the account, which is what holds when the customer
+     * swaps the directory after this has looked at it. What they buy is a job
+     * that says "is a symlink" up front instead of one that fails halfway with
+     * a permission error.
      */
-    private function prepareDelivery(Delivery $delivery, Filesystem $filesystem): Delivery
+    private function prepareDelivery(Delivery $delivery): Delivery
     {
         $directory = $delivery->directory;
 
@@ -409,9 +506,7 @@ final class JobRunner
             // DirectAdmin makes this directory itself the first time a user
             // takes a backup, so it is usually already here; creating it is for
             // the account that has never used the feature.
-            $filesystem->mkdir($directory, 0750);
-            $filesystem->chown($directory, $delivery->account->uid, false);
-            $filesystem->chgrp($directory, $delivery->account->gid, false);
+            (new AccountFilesystem($delivery->account))->mkdir($directory, 0750);
         }
 
         $resolved = realpath($directory);
@@ -422,41 +517,6 @@ final class JobRunner
         }
 
         return $delivery->withDirectory($resolved);
-    }
-
-    /** Move the one staged file into place and hand it to the account. */
-    private function deliver(Job $job, Delivery $delivery, string $staging, string $path, Filesystem $filesystem): void
-    {
-        $source = rtrim($staging, '/') . '/' . PathGuard::toArchiveMember($path);
-        $target = $delivery->target();
-
-        if (is_link($source) || !is_file($source)) {
-            throw new BorgPluginException('The restore did not produce ' . $path . '.');
-        }
-
-        // Replaced, not written through: a link of that name sitting in the
-        // customer's own directory would otherwise choose the destination.
-        if (file_exists($target) || is_link($target)) {
-            $this->log($job, 'Replacing the existing ' . $target . '.');
-            $filesystem->remove($target);
-        }
-
-        $filesystem->rename($source, $target);
-
-        // DirectAdmin reads these as root, so the mode is not about DirectAdmin
-        // -- it is about the tarball holding one customer's databases and
-        // configuration while it sits in a directory they can reach. The
-        // ownership is what DirectAdmin does require of a backup it restores.
-        $filesystem->chmod($target, 0600);
-        $filesystem->chown($target, $delivery->account->uid, false);
-        $filesystem->chgrp($target, $delivery->account->gid, false);
-
-        $this->log($job, \sprintf(
-            'Delivered %s to %s, owned by %s.',
-            $delivery->filename,
-            $delivery->directory,
-            $delivery->account->username
-        ));
     }
 
     /**

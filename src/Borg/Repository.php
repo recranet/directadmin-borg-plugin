@@ -282,6 +282,40 @@ final class Repository
         return $arguments;
     }
 
+    /**
+     * Arguments for streaming archive members to stdout as a tar.
+     *
+     * The in-place restore into a customer's home: borg reads the repository as
+     * root and writes nothing, and a tar running as the customer does the
+     * writing. Read-only like everything else here -- export-tar never touches
+     * the repository, only the pipe.
+     *
+     * @param string[] $paths absolute paths as stored in the archive
+     *
+     * @return string[]
+     */
+    public function exportTarArguments(string $archive, array $paths): array
+    {
+        $arguments = ['export-tar', '--list', $this->archiveRef($archive), '-'];
+        foreach ($paths as $path) {
+            $arguments[] = PathGuard::toArchiveMember($path);
+        }
+
+        return $arguments;
+    }
+
+    /**
+     * Arguments for writing one archived file's contents to stdout.
+     *
+     * A delivery: the account writes the file, so borg only has to read it.
+     *
+     * @return string[]
+     */
+    public function extractToStdoutArguments(string $archive, string $path): array
+    {
+        return ['extract', '--stdout', $this->archiveRef($archive), PathGuard::toArchiveMember($path)];
+    }
+
     /** @return string[] */
     public function checkArguments(): array
     {

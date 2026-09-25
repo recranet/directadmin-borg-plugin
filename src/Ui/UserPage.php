@@ -383,10 +383,10 @@ final class UserPage
             // directory, so "/" is what puts a file back where it came from.
             'destination' => '/',
             'in_place'    => true,
-            // Not chown_to: an extract as root restores the ownership recorded
-            // in the archive, which for this account's own files is already
-            // right. confine_to is what makes the worker re-check every path
-            // against this home before it writes anything.
+            // Not chown_to: the worker writes an in-place restore as this
+            // account, so the files come back owned by it without a chown.
+            // confine_to is what makes the worker re-check every path against
+            // this home, and it is also who the writing is done as.
             'confine_to' => $account->username,
             'trigger'    => 'user',
         ]);

@@ -103,11 +103,11 @@ final class AccountTreeRestore
             // from.
             'destination' => '/',
             'in_place'    => true,
-            // Not chown_to: an extract run as root restores the ownership
-            // recorded in the archive, which for an account's own files is
-            // already correct. confine_to is what makes the worker re-resolve
+            // Not chown_to: the worker writes an in-place restore as this
+            // account, never as root, so the files come back owned by it
+            // without a chown. confine_to is what makes the worker re-resolve
             // this account and re-check the path before it writes anything,
-            // and it is also what bounds the deletion above.
+            // and it is also who the deletion above is done as.
             'confine_to'   => $account->username,
             'restore_user' => $account->username,
             'clean_paths'  => $clean !== [] ? $clean : null,
