@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(make:*)",
+      "Bash(make)"
+    ],
+    "ask": [
+      "Bash(sh scripts/deploy.sh:*)",
+      "Bash(scripts/deploy.sh:*)",
+      "Bash(./scripts/deploy.sh:*)"
+    ]
+  }
+}

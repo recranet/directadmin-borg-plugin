@@ -21,8 +21,26 @@ slow. Every tool runs in Docker; nothing needs installing locally.
 
 There is no `make test` or `make deploy`, on purpose: the user wants to see
 exactly what runs, so the suite and deploys are always the scripts themselves,
-called directly. Build with `make package` as its own step, check the version
-in the tarball, then call `scripts/deploy.sh` with the hosts spelled out.
+called directly.
+
+**Claude does not run make at all** — `.claude/settings.json` denies it,
+because a make target runs whatever it contains (ssh included) without a
+permission prompt. The Makefile is for people. Claude runs the commands it
+wraps instead, in full:
+
+```sh
+PHP='docker run --rm -v "$PWD":/app -w /app -e PHP_CS_FIXER_IGNORE_ENV=1 php:8.2-cli-bookworm php'
+$PHP vendor/bin/phpstan analyse --memory-limit=1G                  # stan
+$PHP vendor/bin/php-cs-fixer fix --dry-run --diff                  # cs (drop --dry-run --diff to fix)
+$PHP test/lint-templates.php                                       # templates
+docker run --rm -v "$PWD":/app -w /app composer:2 composer audit --locked
+sh scripts/package.sh                                              # package
+```
+
+`scripts/deploy.sh` is on the ask list, so a deploy always prompts even though
+the ssh it runs happens inside the script. Package first, check the version in
+the tarball (`tar -xzOf dist/borg.tar.gz plugin.conf`), then deploy with the
+hosts spelled out.
 
 ## Hard constraints
 

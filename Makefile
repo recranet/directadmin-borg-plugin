@@ -4,9 +4,15 @@
 # supports -- so syntax newer than the floor cannot slip in unnoticed. The test
 # matrix runs on 8.2 too, so the floor and the matrix are now the same version;
 # keep this pin at the floor if the matrix ever moves ahead of it again.
+#
+# Every step prints a heading and shows its own progress. The tools only draw a
+# progress bar on a terminal, and docker only gives the container one with -t,
+# so -t is passed when make itself was started from a terminal and left off
+# otherwise -- in CI, or piped into a file, where a bar would be noise.
 
-PHP  := docker run --rm -v "$$PWD":/app -w /app -e PHP_CS_FIXER_IGNORE_ENV=1 php:8.2-cli-bookworm php
-COMP := docker run --rm -v "$$PWD":/app -w /app composer:2 composer
+TTY  := $(shell [ -t 0 ] && echo -t)
+PHP  := docker run --rm $(TTY) -v "$$PWD":/app -w /app -e PHP_CS_FIXER_IGNORE_ENV=1 php:8.2-cli-bookworm php
+COMP := docker run --rm $(TTY) -v "$$PWD":/app -w /app composer:2 composer
 
 # The test suite and deploys are deliberately not targets here. Both are run as
 # the scripts themselves -- test/docker-test.sh and scripts/deploy.sh -- so what
@@ -27,30 +33,39 @@ help:
 	@echo "make clean     Remove build output and tool caches"
 
 install:
-	$(COMP) install --no-interaction --no-progress --optimize-autoloader
+	@echo "==> composer install"
+	$(COMP) install --no-interaction --optimize-autoloader
 
 check: stan cs lint
+	@echo "==> make check: stan, cs and lint passed. Next: test/docker-test.sh"
 
 stan:
-	$(PHP) vendor/bin/phpstan analyse --no-progress --memory-limit=1G
+	@echo "==> PHPStan (level 8)"
+	$(PHP) vendor/bin/phpstan analyse --memory-limit=1G
 
 cs:
-	$(PHP) vendor/bin/php-cs-fixer fix --dry-run --diff --show-progress=none
+	@echo "==> Coding standards (report only)"
+	$(PHP) vendor/bin/php-cs-fixer fix --dry-run --diff --show-progress=dots
 
 cs-fix:
-	$(PHP) vendor/bin/php-cs-fixer fix --show-progress=none
+	@echo "==> Coding standards (applying fixes)"
+	$(PHP) vendor/bin/php-cs-fixer fix --show-progress=dots
 
 # Parse-checks on the oldest supported PHP, which is the point of the pin.
 lint:
-	$(PHP) -r 'foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator("src")) as $$f) { if ($$f->getExtension() === "php") { exec("php -l " . escapeshellarg($$f->getPathname()), $$o, $$c); if ($$c !== 0) exit(1); } } echo "src parses\n";'
+	@echo "==> Lint: every PHP file in src/, then every Twig template"
+	$(PHP) -r 'foreach (new RecursiveIteratorIterator(new RecursiveDirectoryIterator("src")) as $$f) { if ($$f->getExtension() === "php") { echo "  ", $$f->getPathname(), "\n"; exec("php -l " . escapeshellarg($$f->getPathname()), $$o, $$c); if ($$c !== 0) exit(1); } } echo "src parses\n";'
 	$(PHP) test/lint-templates.php
 
 # Not part of check: it needs the network, and check has to run offline.
 audit:
+	@echo "==> composer audit"
 	$(COMP) audit --locked --no-interaction
 
 package:
+	@echo "==> Building dist/borg.tar.gz"
 	sh scripts/package.sh
 
 clean:
+	@echo "==> Removing dist/ and tool caches"
 	rm -rf dist .php-cs-fixer.cache
