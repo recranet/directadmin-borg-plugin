@@ -1,8 +1,8 @@
 #!/bin/sh
 # Install or update the plugin on DirectAdmin servers over ssh.
 #
+#   make package                        # build dist/borg.tar.gz first
 #   sh scripts/deploy.sh host [host...]
-#   make deploy HOSTS="host1 host2"     # builds the tarball first
 #
 # Hosts are arguments rather than a list kept in the repository: which servers
 # run this plugin is deployment detail, and this repository is public.

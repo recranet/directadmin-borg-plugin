@@ -50,7 +50,7 @@ for file in "$PLUGIN_DIR"/bootstrap.php "$PLUGIN_DIR"/bin/console \
 done
 echo "    all plugin sources parse on PHP $(php -r 'echo PHP_VERSION;')"
 
-# Static analysis runs here as well as in `make check`, so the containerised
+# Static analysis runs here as well as in `make stan`, so the containerised
 # suite is a complete gate on its own. It analyses the source tree rather than
 # the staged install: the staging copy exists to exercise the installer, and
 # analysing it would load a second identical autoloader.

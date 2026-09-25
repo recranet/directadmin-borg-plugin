@@ -1,5 +1,6 @@
-# The same gate as `make check`, run through the same Makefile targets, so CI
-# and a workstation cannot disagree about what passing means. Everything runs in
+# The same gate as `make check` plus test/docker-test.sh, run through the same
+# targets and script, so CI and a workstation cannot disagree about what
+# passing means. Everything runs in
 # the containers the Makefile and test/docker-test.sh already pin (PHP 8.2 for
 # tooling, AlmaLinux with EPEL borg for the suite); the runner only needs Docker.
 name: CI

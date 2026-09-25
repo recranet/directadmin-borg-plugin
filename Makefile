@@ -8,25 +8,28 @@
 PHP  := docker run --rm -v "$$PWD":/app -w /app -e PHP_CS_FIXER_IGNORE_ENV=1 php:8.2-cli-bookworm php
 COMP := docker run --rm -v "$$PWD":/app -w /app composer:2 composer
 
-.PHONY: help install check test stan cs cs-fix lint audit package deploy clean
+# The test suite and deploys are deliberately not targets here. Both are run as
+# the scripts themselves -- test/docker-test.sh and scripts/deploy.sh -- so what
+# runs, against which environments or hosts, is on the command line in full
+# rather than behind a target name.
+
+.PHONY: help install check stan cs cs-fix lint audit package clean
 
 help:
-	@echo "make check     stan + cs + lint + test  (run this before committing)"
-	@echo "make test      Full suite in Docker (PHP 8.2 + real borg)"
+	@echo "make check     stan + cs + lint (then run test/docker-test.sh before committing)"
 	@echo "make stan      PHPStan level 8"
 	@echo "make cs        Coding standards, report only"
 	@echo "make cs-fix    Coding standards, apply fixes"
 	@echo "make lint      Parse-check PHP and compile every Twig template"
 	@echo "make audit     Check composer.lock against known security advisories"
 	@echo "make package   Build dist/borg.tar.gz for DirectAdmin"
-	@echo 'make deploy    Install or update on servers: make deploy HOSTS="a b"'
 	@echo "make install   Install composer dependencies locally"
 	@echo "make clean     Remove build output and tool caches"
 
 install:
 	$(COMP) install --no-interaction --no-progress --optimize-autoloader
 
-check: stan cs lint test
+check: stan cs lint
 
 stan:
 	$(PHP) vendor/bin/phpstan analyse --no-progress --memory-limit=1G
@@ -46,17 +49,8 @@ lint:
 audit:
 	$(COMP) audit --locked --no-interaction
 
-test:
-	./test/docker-test.sh
-
 package:
 	sh scripts/package.sh
-
-# Hosts are passed in rather than listed here: which servers run this plugin is
-# deployment detail, and this repository is public.
-deploy: package
-	@test -n "$(HOSTS)" || { echo 'Usage: make deploy HOSTS="host1 host2"' >&2; exit 1; }
-	sh scripts/deploy.sh $(HOSTS)
 
 clean:
 	rm -rf dist .php-cs-fixer.cache

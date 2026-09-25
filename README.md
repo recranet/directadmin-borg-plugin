@@ -116,8 +116,8 @@ directory. From a source checkout, build the tarball first with `make package`.
 `scripts/deploy.sh` does the whole thing over ssh, for one host or a fleet:
 
 ```sh
-make deploy HOSTS="host1 host2"    # builds the tarball, then deploys
-sh scripts/deploy.sh host1 host2   # deploys dist/borg.tar.gz as it stands
+make package                       # build dist/borg.tar.gz
+sh scripts/deploy.sh host1 host2   # deploy it, as it stands
 ```
 
 Hosts are arguments rather than a list in the repository, because which servers
@@ -587,7 +587,7 @@ endpoint only returns a job owned by the caller, and reports anything else as
 ## Code quality
 
 ```sh
-make check     # phpstan + cs + lint + test
+make check     # phpstan + cs + lint
 ```
 
 | Target | What it does |
@@ -595,7 +595,8 @@ make check     # phpstan + cs + lint + test
 | `make stan` | PHPStan at level 8 |
 | `make cs` / `make cs-fix` | Coding standards, report only / apply |
 | `make lint` | Parse-check PHP, compile every Twig template |
-| `make test` | Full suite against real borg |
+
+The test suite is not a make target; run `test/docker-test.sh` (below).
 
 PHPStan runs with no baseline and no ignored errors — the findings it raised
 were fixed rather than suppressed. Coding standards are PSR-12 plus the Symfony
@@ -611,7 +612,7 @@ working tree.
 ## Testing
 
 ```sh
-make test                          # the environments that mirror production
+test/docker-test.sh                # the environments that mirror production
 test/docker-test.sh alma9          # just one
 test/docker-test.sh alma9-borg14   # opt-in: borg newer than EPEL ships
 ```

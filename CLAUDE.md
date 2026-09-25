@@ -6,16 +6,23 @@ the plugin does and why; this file is the part that is easy to get wrong.
 ## Commands
 
 ```sh
-make check     # stan + cs + lint + test -- run this before committing
-make test      # full suite in Docker (AlmaLinux 9 and 8, real borg)
-make stan      # PHPStan level 8
-make cs-fix    # apply coding standards (make cs to report only)
-make lint      # parse-check PHP and compile every Twig template
-make package   # build dist/borg.tar.gz
+make check                  # stan + cs + lint
+test/docker-test.sh         # full suite in Docker (AlmaLinux 9 and 8, real borg)
+make stan                   # PHPStan level 8
+make cs-fix                 # apply coding standards (make cs to report only)
+make lint                   # parse-check PHP and compile every Twig template
+make package                # build dist/borg.tar.gz
+sh scripts/deploy.sh host…  # deploy dist/borg.tar.gz as it stands
 ```
 
+Run `make check` and `test/docker-test.sh` before committing.
 `test/docker-test.sh alma9` runs one environment when the full matrix is too
 slow. Every tool runs in Docker; nothing needs installing locally.
+
+There is no `make test` or `make deploy`, on purpose: the user wants to see
+exactly what runs, so the suite and deploys are always the scripts themselves,
+called directly. Build with `make package` as its own step, check the version
+in the tarball, then call `scripts/deploy.sh` with the hosts spelled out.
 
 ## Hard constraints
 
