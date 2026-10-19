@@ -88,9 +88,12 @@ final class Account
         if (!is_readable($passwdFile)) {
             return null;
         }
+        // Not "=== false": a security extension hooking fopen() has been seen
+        // to return null for /etc/passwd, which then surfaced as a TypeError
+        // from fclose() with nothing to say which file it was.
         $handle = @fopen($passwdFile, 'r');
-        if ($handle === false) {
-            return null;
+        if (!\is_resource($handle)) {
+            throw new BorgPluginException(\sprintf('Could not read %s to look up the account.', $passwdFile));
         }
 
         try {

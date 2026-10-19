@@ -37,11 +37,17 @@ final class JobDispatcher
         // backup the moment this request finished. sh exits immediately, the
         // worker is reparented to init, and only the job id — which this plugin
         // generated — is ever interpolated, via "$1"-style placeholders.
+        //
+        // -n because naming the interpreter bypasses bin/console's shebang,
+        // which is where the pages get theirs. Without it the worker loads the
+        // server's php.ini and whatever extensions that pulls in. Imunify360's
+        // i360 is one: it makes fopen() of /etc/passwd return null, and every
+        // restore failed resolving the account.
         $process = new Process(
             [
                 '/bin/sh',
                 '-c',
-                'nohup "$0" "$1" "$2" "$3" >/dev/null 2>&1 < /dev/null &',
+                'nohup "$0" -n "$1" "$2" "$3" >/dev/null 2>&1 < /dev/null &',
                 $php,
                 $console,
                 'borg:job',

@@ -1707,6 +1707,31 @@ $t->ok(
     'the detached backup succeeded (' . ($detached?->status() ?? 'missing') . ')'
 );
 
+// The worker runs on php -n like the pages. With the server's php.ini it loads
+// whatever that names; Imunify360's i360 extension made fopen() of /etc/passwd
+// return null there, and every restore failed. A scan-dir ini with an
+// auto_prepend_file stands in for it: the marker only appears if ini is read.
+$scanDir = (string) \PHP_CONFIG_FILE_SCAN_DIR;
+$t->ok($scanDir !== '' && is_dir($scanDir), 'the test PHP has an ini scan directory to plant in (' . $scanDir . ')');
+$iniMarker = sys_get_temp_dir() . '/borg-ini-loaded';
+$prepend = sys_get_temp_dir() . '/borg-ini-prepend.php';
+$plantedIni = $scanDir . '/zz-borg-test.ini';
+@unlink($iniMarker);
+file_put_contents($prepend, '<?php touch(' . var_export($iniMarker, true) . ');');
+file_put_contents($plantedIni, 'auto_prepend_file=' . $prepend . "\n");
+
+try {
+    $noIni = $plugin->jobs()->create(Job::TYPE_CHECK, 'test', []);
+    $plugin->dispatcher()->dispatch($noIni);
+    $noIni = $t->waitForJob($plugin, $noIni->id, 180);
+    $t->ok($noIni !== null && $noIni->isFinished(), 'a detached job finishes with an ini planted in the scan directory');
+} finally {
+    unlink($plantedIni);
+    unlink($prepend);
+}
+$t->ok(!file_exists($iniMarker), 'the detached worker does not load php.ini (runs on php -n)');
+@unlink($iniMarker);
+
 // ==================================================================== secrets
 
 $t->group('Secrets are not leaked');
