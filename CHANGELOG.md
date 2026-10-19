@@ -3,6 +3,16 @@
 What changed per release, for whoever upgrades a server. The release commit
 (`Release x.y.z: ...`) carries the full reasoning; this is the short version.
 
+## 2.5.3 — 2026-10-19
+
+- **Dark mode follows DirectAdmin's.** The pages read Evolution's own
+  light/dark setting instead of the operating system's, follow the toolbar
+  toggle without a reload, and paint their own background. Before, a dark
+  Evolution showed dark cards on a white page with an unreadable heading and
+  default blue links. Outside Evolution the OS setting still decides.
+
+config.json carries over untouched.
+
 ## 2.5.2 — 2026-10-19
 
 - **Restores work on servers running Imunify360.** Every restore on
