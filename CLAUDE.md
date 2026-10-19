@@ -92,7 +92,8 @@ an early refusal with a clear message, never the guard.
   check count and the environments it passed on.
 - **Version bumps live in release commits only** (`Release 2.1.0: ...`), never
   in a feature commit. `plugin.conf` carries the version; the tarball name does
-  not.
+  not. The release commit also adds the version's entry to `CHANGELOG.md`:
+  what an operator upgrading a server notices, in a few bullets.
 - **Config keys are never renamed**, only relabelled — an existing install's
   `config.json` has to keep working.
 - Small final classes with docblocks. A hand-rolled container in `Plugin.php`.
