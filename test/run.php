@@ -804,6 +804,19 @@ $t->group('Escaping');
 $t->notContains($t->page('user', 'alice', ['archive' => '<script>alert(1)</script>']), '<script>alert(1)</script>', 'archive names are escaped');
 $t->notContains($t->page('user', 'alice', ['path' => '"><script>x</script>']), '"><script>x</script>', 'paths are escaped');
 
+$t->group('Dark mode');
+
+// Evolution's mode lives on the parent document, out of reach of the
+// stylesheet, so both levels have to carry the script that copies it across
+// and the rule that paints the frame's own body. Without the second, dark cards
+// sit on the iframe's white background.
+foreach (['user' => $t->page('user', 'alice'), 'admin' => $t->page('admin')] as $level => $out) {
+    $t->contains($out, "host.getAttribute('data-mode')", "the {$level} page reads Evolution's colour mode");
+    $t->contains($out, ':root[data-borg-mode=dark]', "the {$level} page has a dark token set keyed on that mode");
+    $t->contains($out, '#plugin-host{background:var(--borg-page)', "the {$level} page paints the frame's background");
+    $t->contains($out, ':where(a){color:var(--borg-accent)', "the {$level} page colours bare links");
+}
+
 $t->group('Admin page');
 
 $out = $t->page('admin');

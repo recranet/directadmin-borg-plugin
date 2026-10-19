@@ -2,6 +2,7 @@
    no <html>, <head> or <body>. Styles are namespaced under .borg-plugin so they
    cannot leak into the surrounding skin. #}
 <div class="borg-plugin">
+    {% include 'partial/theme.html.twig' %}
     {% include 'partial/styles.html.twig' %}
 
     <header class="borg-head">

@@ -1,0 +1,37 @@
+{# Evolution keeps its light/dark choice as data-mode on the parent document's
+   <html>, and this page is a same-origin iframe that inherits none of it (see
+   styles.html.twig). Copy it across, and keep watching, because the mode
+   toggle in Evolution's toolbar flips it without reloading the frame.
+
+   Only "dark" and "light" are copied. Anything else, no parent, or a parent
+   that is not Evolution (a legacy skin, the page opened on its own) leaves the
+   attribute off, so the stylesheet falls back to prefers-color-scheme.
+
+   Inline and ahead of the stylesheet, so the attribute is in place before the
+   first paint and the page does not flash light on its way to dark. #}
+<script>
+(function () {
+    var root = document.documentElement;
+    var host = null;
+    try {
+        if (window.parent !== window) { host = window.parent.document.documentElement; }
+    } catch (e) {
+        // Cross-origin parent: nothing to read, the media query decides.
+    }
+    if (!host) { return; }
+
+    function sync() {
+        var mode = host.getAttribute('data-mode');
+        if (mode === 'dark' || mode === 'light') {
+            root.setAttribute('data-borg-mode', mode);
+        } else {
+            root.removeAttribute('data-borg-mode');
+        }
+    }
+
+    sync();
+    if (window.MutationObserver) {
+        new MutationObserver(sync).observe(host, { attributes: true, attributeFilter: ['data-mode'] });
+    }
+})();
+</script>
